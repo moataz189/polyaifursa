@@ -263,6 +263,28 @@ def get_predictions_by_score(min_score: float):
             }
             for obj in objects
         ]
+@app.get("/image/{type}/{filename}")
+def get_image(type: str, filename: str):
+
+    if type == "original":
+        image_path = os.path.join(UPLOAD_DIR, filename)
+
+    elif type == "predicted":
+        image_path = os.path.join(PREDICTED_DIR, filename)
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image type"
+        )
+
+    if not os.path.exists(image_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Image not found"
+        )
+
+    return FileResponse(image_path)
 
 if __name__ == "__main__":
     import uvicorn
