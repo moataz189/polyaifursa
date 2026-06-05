@@ -26,3 +26,15 @@ class TestPredictionTime(unittest.TestCase):
         self.assertIn("time_took", data)
         self.assertIsInstance(data["time_took"], (int, float))
         self.assertGreaterEqual(data["time_took"], 0)
+    
+    def test_predict_rejects_non_image_file(self):
+        response = self.client.post(
+            "/predict",
+            files={"file": ("test.txt", b"hello", "text/plain")}
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "Only image files are supported"
+        )
