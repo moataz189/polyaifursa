@@ -6,6 +6,10 @@ import app as app_module
 from app import app
 
 
+ORIGINAL_UPLOAD_DIR = app_module.UPLOAD_DIR
+ORIGINAL_PREDICTED_DIR = app_module.PREDICTED_DIR
+
+
 def setup_dirs():
     original_dir = tempfile.mkdtemp()
     predicted_dir = tempfile.mkdtemp()
@@ -19,6 +23,9 @@ def setup_dirs():
 
 
 def teardown_dirs(original_dir, predicted_dir):
+    app_module.UPLOAD_DIR = ORIGINAL_UPLOAD_DIR
+    app_module.PREDICTED_DIR = ORIGINAL_PREDICTED_DIR
+
     shutil.rmtree(original_dir)
     shutil.rmtree(predicted_dir)
 
