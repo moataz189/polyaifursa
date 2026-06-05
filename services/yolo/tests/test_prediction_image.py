@@ -29,6 +29,7 @@ def test_get_prediction_image_success(tmp_path, monkeypatch):
 
     assert response.status_code == 200
 
+
 def test_get_prediction_image_not_found(tmp_path, monkeypatch):
     setup_db(tmp_path, monkeypatch)
 

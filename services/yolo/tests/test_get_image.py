@@ -45,6 +45,20 @@ def test_get_original_image_success():
 
     finally:
         teardown_dirs(original_dir, predicted_dir)
+    
+def test_get_predicted_image_success():
+    client, original_dir, predicted_dir = setup_dirs()
+
+    try:
+            image_path = os.path.join(predicted_dir, "test.jpg")
+            with open(image_path, "wb") as f:
+                f.write(b"fake image content")
+
+            response = client.get("/image/predicted/test.jpg")
+            assert response.status_code == 200
+
+    finally:
+            teardown_dirs(original_dir, predicted_dir)
 
 
 def test_get_image_invalid_type():
