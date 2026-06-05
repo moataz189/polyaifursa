@@ -9,7 +9,7 @@ from app import app
 ORIGINAL_UPLOAD_DIR = app_module.UPLOAD_DIR
 ORIGINAL_PREDICTED_DIR = app_module.PREDICTED_DIR
 
-
+##utility functions to setup and teardown temporary directories for testing
 def setup_dirs():
     original_dir = tempfile.mkdtemp()
     predicted_dir = tempfile.mkdtemp()
