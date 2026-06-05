@@ -194,6 +194,47 @@ def health():
     """
     return {"status": "ok"}
 
+@app.get("/predictions/label/{label}")
+def get_predictions_by_label(label: str):
+
+    if not label.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Label cannot be empty"
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        objects = conn.execute(
+            "SELECT * FROM detection_objects WHERE label = ?",
+            (label,)
+        ).fetchall()
+
+        result = []
+
+        for obj in objects:
+
+            session = conn.execute(
+                "SELECT * FROM prediction_sessions WHERE uid = ?",
+                (obj["prediction_uid"],)
+            ).fetchone()
+
+            result.append({
+                "uid": session["uid"],
+                "timestamp": session["timestamp"],
+                "detection_objects": [
+                    {
+                        "id": obj["id"],
+                        "label": obj["label"],
+                        "score": obj["score"],
+                        "box": obj["box"]
+                    }
+                ]
+            })
+
+        return result
+
 if __name__ == "__main__":
     import uvicorn
 
