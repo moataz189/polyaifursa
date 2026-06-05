@@ -234,6 +234,35 @@ def get_predictions_by_label(label: str):
             })
 
         return result
+    
+
+@app.get("/predictions/score/{min_score}")
+def get_predictions_by_score(min_score: float):
+
+    if min_score < 0.0 or min_score > 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="min_score must be between 0.0 and 1.0"
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        objects = conn.execute(
+            "SELECT * FROM detection_objects WHERE score >= ?",
+            (min_score,)
+        ).fetchall()
+
+        return [
+            {
+                "id": obj["id"],
+                "prediction_uid": obj["prediction_uid"],
+                "label": obj["label"],
+                "score": obj["score"],
+                "box": obj["box"]
+            }
+            for obj in objects
+        ]
 
 if __name__ == "__main__":
     import uvicorn
