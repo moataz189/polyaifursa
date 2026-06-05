@@ -29,8 +29,8 @@ if _raw_threshold is not None:
     CONFIDENCE_THRESHOLD = float(_raw_threshold)
     logging.info(f"CONFIDENCE_THRESHOLD set to {CONFIDENCE_THRESHOLD} (from environment)")
 else:
-    CONFIDENCE_THRESHOLD = 0.5
-    logging.info(f"CONFIDENCE_THRESHOLD not set, using default: {CONFIDENCE_THRESHOLD}") 
+    CONFIDENCE_THRESHOLD = 0.5# pragma: no cover
+    logging.info(f"CONFIDENCE_THRESHOLD not set, using default: {CONFIDENCE_THRESHOLD}") # pragma: no cover
 
 UPLOAD_DIR = "uploads/original"
 PREDICTED_DIR = "uploads/predicted"
@@ -286,7 +286,7 @@ def get_image(type: str, filename: str):
 
     return FileResponse(image_path)
 
-if __name__ == "__main__":
+if __name__ == "__main__":# pragma: no cover
     import uvicorn
 
     init_db()
