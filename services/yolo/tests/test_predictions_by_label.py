@@ -56,3 +56,4 @@ def test_get_predictions_by_empty_label():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Label cannot be empty"
+    #add note
