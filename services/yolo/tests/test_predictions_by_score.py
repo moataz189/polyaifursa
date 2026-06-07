@@ -20,6 +20,7 @@ def test_get_predictions_by_score_found():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.91, "[10, 20, 100, 200]"))
+        conn
 
     response = client.get("/predictions/score/0.5")
 
@@ -42,6 +43,7 @@ def test_get_predictions_by_score_no_matches():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.20, "[10, 20, 100, 200]"))
+        conn.commit()
 
     response = client.get("/predictions/score/0.5")
 
