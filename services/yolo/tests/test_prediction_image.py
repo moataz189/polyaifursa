@@ -28,7 +28,7 @@ def test_get_prediction_image_success(tmp_path):
     assert response.status_code == 200
 
 
-def test_get_prediction_image_not_found(tmp_path):
+def test_get_prediction_image_not_found():
     client = setup_db()
 
     response = client.get("/prediction/not-found/image")
