@@ -1,20 +1,18 @@
 from contextlib import closing
 import sqlite3
+import tempfile
 from fastapi.testclient import TestClient
 import app as app_module
 from app import app, init_db
 
 
-def setup_db(tmp_path, monkeypatch):
-    db_file = str(tmp_path / "test_predictions.db")
-    monkeypatch.setattr("app.DB_PATH", db_file)
+def setup_db():
+    _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
     init_db()
+    return TestClient(app)
 
-
-def test_get_prediction_image_success(tmp_path, monkeypatch):
-    setup_db(tmp_path, monkeypatch)
-
-    client = TestClient(app)
+def test_get_prediction_image_success(tmp_path):
+    client = setup_db()
 
     image_path = tmp_path / "predicted.jpg"
     image_path.write_bytes(b"fake image content")
@@ -32,10 +30,8 @@ def test_get_prediction_image_success(tmp_path, monkeypatch):
     assert response.status_code == 200
 
 
-def test_get_prediction_image_not_found(tmp_path, monkeypatch):
-    setup_db(tmp_path, monkeypatch)
-
-    client = TestClient(app)
+def test_get_prediction_image_not_found():
+    client = setup_db()
 
     response = client.get("/prediction/not-found/image")
 
