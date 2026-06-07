@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 import tempfile
 from fastapi.testclient import TestClient
@@ -14,7 +15,7 @@ def setup_db():
 def test_get_predictions_by_label_found():
     client = setup_db()
 
-    with sqlite3.connect(app_module.DB_PATH) as conn:
+    with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
         conn.execute("""
             INSERT INTO prediction_sessions
             (uid, original_image, predicted_image)
@@ -26,7 +27,7 @@ def test_get_predictions_by_label_found():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.91, "[10,20,100,200]"))
-
+        conn.commit()
     response = client.get("/predictions/label/person")
 
     assert response.status_code == 200
@@ -49,6 +50,7 @@ def test_get_predictions_by_label_no_matches():
 
 def test_get_predictions_by_empty_label():
     client = setup_db()
+
 
     response = client.get("/predictions/label/%20")
 

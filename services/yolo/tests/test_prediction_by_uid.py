@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 import tempfile
 from fastapi.testclient import TestClient
@@ -13,7 +14,8 @@ def setup_db():
 
 def test_get_prediction_by_uid_success():
     client = setup_db()
-    with sqlite3.connect(app_module.DB_PATH) as conn:
+
+    with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
         conn.execute("""
             INSERT INTO prediction_sessions
             (uid, original_image, predicted_image)
@@ -25,7 +27,7 @@ def test_get_prediction_by_uid_success():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.91, "[10, 20, 100, 200]"))
-
+        conn.commit()
     response = client.get("/prediction/abc-123")
 
     assert response.status_code == 200

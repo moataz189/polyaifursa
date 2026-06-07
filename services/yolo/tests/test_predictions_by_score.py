@@ -20,6 +20,7 @@ def test_get_predictions_by_score_found():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.91, "[10, 20, 100, 200]"))
+        conn
 
     response = client.get("/predictions/score/0.5")
 
@@ -42,6 +43,7 @@ def test_get_predictions_by_score_no_matches():
             (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, ("abc-123", "person", 0.20, "[10, 20, 100, 200]"))
+        conn.commit()
 
     response = client.get("/predictions/score/0.5")
 
@@ -51,9 +53,10 @@ def test_get_predictions_by_score_no_matches():
 
 def test_get_predictions_by_score_invalid_score():
     client = setup_db()
-
+#   check for score less than 0.0
     response = client.get("/predictions/score/1.5")
 
     assert response.status_code == 400
     assert response.json()["detail"] == \
         "min_score must be between 0.0 and 1.0"
+    

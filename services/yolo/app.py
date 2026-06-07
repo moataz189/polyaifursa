@@ -9,7 +9,7 @@ import os
 import uuid
 import shutil
 import time
-
+from contextlib import closing
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Disable GPU usage
@@ -44,7 +44,7 @@ model = YOLO("yolov8n.pt")
 
 # Initialize SQLite
 def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         # Create the predictions main table to store the prediction session
         conn.execute("""
             CREATE TABLE IF NOT EXISTS prediction_sessions (
@@ -71,28 +71,28 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_prediction_uid ON detection_objects (prediction_uid)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_label ON detection_objects (label)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_score ON detection_objects (score)")
-
+        conn.commit()
 
 def save_prediction_session(uid, original_image, predicted_image):
     """
     Save prediction session to database
     """
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("""
             INSERT INTO prediction_sessions (uid, original_image, predicted_image)
             VALUES (?, ?, ?)
         """, (uid, original_image, predicted_image))
-
+        conn.commit()
 def save_detection_object(prediction_uid, label, score, box):
     """
     Save detection object to database
     """
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("""
             INSERT INTO detection_objects (prediction_uid, label, score, box)
             VALUES (?, ?, ?, ?)
         """, (prediction_uid, label, score, str(box)))
-
+        conn.commit()
 @app.post("/predict")
 def predict(file: UploadFile = File(...)):
     """
@@ -144,7 +144,7 @@ def get_prediction_by_uid(uid: str):
     """
     Get prediction session by uid with all detected objects
     """
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         # Get prediction session
         session = conn.execute("SELECT * FROM prediction_sessions WHERE uid = ?", (uid,)).fetchone()
@@ -178,7 +178,7 @@ def get_prediction_image(uid: str):
     """
     Return the annotated (bounding-box) image for a prediction
     """
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         row = conn.execute(
             "SELECT predicted_image FROM prediction_sessions WHERE uid = ?", (uid,)
         ).fetchone()
@@ -203,7 +203,7 @@ def get_predictions_by_label(label: str):
             detail="Label cannot be empty"
         )
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
 
         objects = conn.execute(
@@ -245,7 +245,7 @@ def get_predictions_by_score(min_score: float):
             detail="min_score must be between 0.0 and 1.0"
         )
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
 
         objects = conn.execute(
