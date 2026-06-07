@@ -1,19 +1,18 @@
 import sqlite3
+import tempfile
 from fastapi.testclient import TestClient
 import app as app_module
 from app import app, init_db
 
 
-def setup_db(tmp_path, monkeypatch):
-    db_file = str(tmp_path / "test_predictions.db")
-    monkeypatch.setattr("app.DB_PATH", db_file)
+def setup_db():
+    _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
     init_db()
     return TestClient(app)
 
 
-def test_get_prediction_by_uid_success(tmp_path, monkeypatch):
-    client = setup_db(tmp_path, monkeypatch)
-
+def test_get_prediction_by_uid_success():
+    client = setup_db()
     with sqlite3.connect(app_module.DB_PATH) as conn:
         conn.execute("""
             INSERT INTO prediction_sessions
@@ -43,8 +42,8 @@ def test_get_prediction_by_uid_success(tmp_path, monkeypatch):
     assert data["detection_objects"][0]["box"] == "[10, 20, 100, 200]"
 
 
-def test_get_prediction_by_uid_not_found(tmp_path, monkeypatch):
-    client = setup_db(tmp_path, monkeypatch)
+def test_get_prediction_by_uid_not_found():
+    client = setup_db()
 
     response = client.get("/prediction/not-found")
 
