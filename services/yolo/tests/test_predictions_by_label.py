@@ -57,3 +57,4 @@ def test_get_predictions_by_empty_label():
     assert response.status_code == 400
     assert response.json()["detail"] == "Label cannot be empty"
     #add note to check for empty label with spaces only
+    #test_get_predictions_by_label_no_matches already covers the case of no matches, so we can be sure that the endpoint is working correctly when there are no predictions with the specified label.
