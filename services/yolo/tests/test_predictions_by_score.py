@@ -60,3 +60,4 @@ def test_get_predictions_by_score_invalid_score():
     assert response.json()["detail"] == \
         "min_score must be between 0.0 and 1.0"
     
+    #test
