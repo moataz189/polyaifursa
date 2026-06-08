@@ -38,3 +38,7 @@ class TestPredictionTime(unittest.TestCase):
             response.json()["detail"],
             "Only image files are supported"
         )
+
+
+
+        #example 
