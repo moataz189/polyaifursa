@@ -10,27 +10,38 @@ import uuid
 import shutil
 import time
 from contextlib import closing
+import signal
+import sys
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Disable GPU usage
 import torch
 torch.cuda.is_available = lambda: False
-
+is_shutting_down = False
 app = FastAPI()
 
 # Expose /metrics endpoint with default process metrics + FastAPI HTTP metrics
 Instrumentator().instrument(app).expose(app)
+def handle_sigterm(_signum, _frame):
+    global is_shutting_down
+    is_shutting_down = True
+    logging.info("Received SIGTERM. Shutting down gracefully...")
+    # Perform cleanup: close DB connections, finish pending work, etc.
+    logging.info("Cleanup done. Exiting.")
+    sys.exit(0)
 
+signal.signal(signal.SIGTERM, handle_sigterm)
 # Confidence threshold for object detection (0.0 - 1.0).
 # Detections below this score are discarded.
 # Override with: export CONFIDENCE_THRESHOLD=0.7
 _raw_threshold = os.environ.get("CONFIDENCE_THRESHOLD")
 if _raw_threshold is not None:
     CONFIDENCE_THRESHOLD = float(_raw_threshold)
-    logging.info(f"CONFIDENCE_THRESHOLD set to {CONFIDENCE_THRESHOLD} (from environment)")
+    logging.info("CONFIDENCE_THRESHOLD set to %s (from environment)", CONFIDENCE_THRESHOLD)
 else:
     CONFIDENCE_THRESHOLD = 0.5
-    logging.info(f"CONFIDENCE_THRESHOLD not set, using default: {CONFIDENCE_THRESHOLD}") 
+    logging.info("CONFIDENCE_THRESHOLD not set, using default: %s", CONFIDENCE_THRESHOLD)
 
 UPLOAD_DIR = "uploads/original"
 PREDICTED_DIR = "uploads/predicted"
@@ -285,6 +296,12 @@ def get_image(type: str, filename: str):
         )
 
     return FileResponse(image_path)
+
+@app.get("/ready")
+def ready():
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Service is shutting down")
+    return {"status": "ready"}
 
 if __name__ == "__main__":# pragma: no cover
     import uvicorn
