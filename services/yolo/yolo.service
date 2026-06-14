@@ -1,0 +1,12 @@
+[Unit]
+Description=YOLO Detection App
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polyaifursa/services/yolo
+ExecStart=/home/ubuntu/polyaifursa/.venv/bin/python app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
