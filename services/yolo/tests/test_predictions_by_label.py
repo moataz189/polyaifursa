@@ -58,3 +58,4 @@ def test_get_predictions_by_empty_label():
     assert response.json()["detail"] == "Label cannot be empty"
     #add note to check for empty label with spaces only
     #task 1 update
+    #example
