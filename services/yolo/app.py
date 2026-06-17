@@ -205,6 +205,13 @@ def health():
     """
     return {"status": "ok"}
 
+@app.get("/check")
+def check():
+    """
+    Check endpoint
+    """
+    return {"status": "ok"}
+
 @app.get("/predictions/label/{label}")
 def get_predictions_by_label(label: str):
 
