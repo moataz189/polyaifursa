@@ -1,0 +1,15 @@
+[Unit]
+Description=PolyAI Frontend
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polyaifursa/services/frontend
+
+ExecStart=/usr/bin/npm start
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
