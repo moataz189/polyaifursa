@@ -21,10 +21,22 @@ jobs:
             cd /home/ubuntu/polyaifursa
             git pull origin dev
             source .venv/bin/activate
-            pip install -r services/yolo/torch-requirements.txt
-            pip install -r services/yolo/requirements.txt
+            pip install -r services/agent/requirements.txt
+            cd services/frontend
+            npm install
+            npm run build
+            sudo cp ../deployments/agent.service /etc/systemd/system/agent.service
+            sudo cp ../deployments/frontend.service /etc/systemd/system/frontend.service
+            cd ../yolo
+            pip install -r torch-requirements.txt
+            pip install -r requirements.txt
             sudo systemctl restart yolo
             sudo systemctl status yolo --no-pager
+            sudo systemctl daemon-reload
+            sudo systemctl enable yolo agent frontend
+            sudo systemctl restart yolo agent frontend
+            sudo systemctl status agent --no-pager
+            sudo systemctl status frontend --no-pager
 
   deploy-prod:
     if: github.ref == 'refs/heads/main'
@@ -40,7 +52,20 @@ jobs:
             cd /home/ubuntu/polyaifursa
             git pull origin main
             source .venv/bin/activate
+            pip install -r services/agent/requirements.txt
+
+            cd services/frontend
+            npm install
+            npm run build
+            sudo cp ../deployments/agent.service /etc/systemd/system/agent.service
+            sudo cp ../deployments/frontend.service /etc/systemd/system/frontend.service
+
             pip install -r services/yolo/torch-requirements.txt
             pip install -r services/yolo/requirements.txt
             sudo systemctl restart yolo
             sudo systemctl status yolo --no-pager
+            sudo systemctl daemon-reload
+            sudo systemctl enable yolo agent frontend
+            sudo systemctl restart yolo agent frontend
+            sudo systemctl status agent --no-pager
+            sudo systemctl status frontend --no-pager
