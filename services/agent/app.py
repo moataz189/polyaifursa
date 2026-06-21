@@ -190,6 +190,7 @@ def chat(request: ChatRequest):
             lc_messages.append(AIMessage(content=msg.content))
 
     token_image = _current_image_b64.set(latest_image)
+    token_prediction = _latest_prediction_uid.set(None)
     
 
     try:
@@ -197,6 +198,7 @@ def chat(request: ChatRequest):
         return ChatResponse(response=answer, image_url=image_url)
     finally:
         _current_image_b64.reset(token_image)
+        _latest_prediction_uid.reset(token_prediction)
         
 
 @app.get("/health")
