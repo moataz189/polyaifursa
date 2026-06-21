@@ -43,11 +43,18 @@ if MODEL not in ALLOWED_MODELS:
     )
 
 SYSTEM_PROMPT = (
-    "You are an AI vision assistant. You help users understand and analyze images. "
-    "Use the available tools to extract information from images. "
+    "You are an AI vision assistant. You help users understand and analyze images.\n"
+    "- Use the detect_objects tool to analyze an image and identify the objects in it.\n"
+    "- When show_annotated_image is used, do NOT include the image URL in the text response.\n"
+    "- The frontend will display the image automatically.\n"
+    "- Mention that the annotated image is attached, but never print the URL.\n"
+    "annotated image (the image with bounding boxes). It returns the picture with boxes drawn on it.\n"
+    "- show_annotated_image needs a prior detection, so if none has run yet in this turn, "
+    "call detect_objects first and then show_annotated_image."
 )
 
 _current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
+_latest_prediction_uid: ContextVar[Optional[str]] = ContextVar("latest_prediction_uid", default=None)
 
 
 
@@ -72,9 +79,28 @@ def detect_objects() -> str:
     return json.dumps(data)
 
 
+@tool
+def show_annotated_image() -> str:
+    """Return the URL of the annotated image (the picture with bounding boxes drawn on it)
+    from the most recent object detection.
+
+    Use this ONLY when the user explicitly asks to see the annotated image / the image with boxes.
+    You must run detect_objects first so a detection result exists."""
+    prediction_uid = _latest_prediction_uid.get()
+
+    if not prediction_uid:
+        return json.dumps(
+            {"error": "No detection has been run yet. Run detect_objects first, then try again."}
+        )
+
+    image_url = f"{YOLO_PUBLIC_URL}/prediction/{prediction_uid}/image"
+    return json.dumps({"image_url": image_url})
+
+
 # Registry: map tool name -> tool function
 TOOLS = {
-    detect_objects.name: detect_objects
+    detect_objects.name: detect_objects,
+    show_annotated_image.name: show_annotated_image,
 }
 
 llm = init_chat_model(MODEL, temperature=0)
@@ -110,11 +136,16 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
             messages.append(tool_result)
 
             if tool_call["name"] == "detect_objects":
+                # Store the UID in THIS context so a later show_annotated_image
+                # call (which runs in a child context) can read it.
                 tool_data = json.loads(tool_result.content)
                 prediction_uid = tool_data.get("prediction_uid")
-
                 if prediction_uid:
-                    image_url = f"{YOLO_PUBLIC_URL}/prediction/{prediction_uid}/image"
+                    _latest_prediction_uid.set(prediction_uid)
+
+            if tool_call["name"] == "show_annotated_image":
+                tool_data = json.loads(tool_result.content)
+                image_url = tool_data.get("image_url") or image_url
 
     return "Agent stopped: maximum iterations reached.", image_url
 
@@ -163,6 +194,7 @@ def chat(request: ChatRequest):
             lc_messages.append(AIMessage(content=msg.content))
 
     token_image = _current_image_b64.set(latest_image)
+    token_prediction = _latest_prediction_uid.set(None)
     
 
     try:
@@ -170,6 +202,7 @@ def chat(request: ChatRequest):
         return ChatResponse(response=answer, image_url=image_url)
     finally:
         _current_image_b64.reset(token_image)
+        _latest_prediction_uid.reset(token_prediction)
         
 
 @app.get("/health")
