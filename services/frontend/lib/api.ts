@@ -24,6 +24,6 @@ export async function sendMessage(
     response: data.response as string,
     // The agent returns a relative path (e.g. "/image/<uid>").
     // Turn it into an absolute URL pointing at the agent service.
-    imageUrl: data.image_url ? `${AGENT_URL}${data.image_url}` : null,
+    imageUrl: data.image_url ?? null,
   };
 }
