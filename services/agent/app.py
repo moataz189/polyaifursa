@@ -26,6 +26,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
+YOLO_PUBLIC_URL = os.getenv("YOLO_PUBLIC_URL", YOLO_SERVICE_URL)
 MODEL = os.environ.get("MODEL")
 
 # Text-only models
@@ -113,7 +114,7 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
                 prediction_uid = tool_data.get("prediction_uid")
 
                 if prediction_uid:
-                    image_url = f"{YOLO_SERVICE_URL}/prediction/{prediction_uid}/image"
+                    image_url = f"{YOLO_PUBLIC_URL}/prediction/{prediction_uid}/image"
 
     return "Agent stopped: maximum iterations reached.", image_url
 
