@@ -45,7 +45,9 @@ if MODEL not in ALLOWED_MODELS:
 SYSTEM_PROMPT = (
     "You are an AI vision assistant. You help users understand and analyze images.\n"
     "- Use the detect_objects tool to analyze an image and identify the objects in it.\n"
-    "- Use the show_annotated_image tool ONLY when the user explicitly asks to see the "
+    "- When show_annotated_image is used, do NOT include the image URL in the text response.\n"
+    "- The frontend will display the image automatically.\n"
+    "- Mention that the annotated image is attached, but never print the URL.\n"
     "annotated image (the image with bounding boxes). It returns the picture with boxes drawn on it.\n"
     "- show_annotated_image needs a prior detection, so if none has run yet in this turn, "
     "call detect_objects first and then show_annotated_image."
