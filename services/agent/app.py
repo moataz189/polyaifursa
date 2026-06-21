@@ -67,7 +67,8 @@ def detect_objects() -> str:
     data = response.json()
     uid = data.get("uid")
     if uid:
-     _latest_image_url.set(uid)
+        #image_url = f"{YOLO_SERVICE_URL}/predicted/{uid}.jpg"
+        _latest_image_url.set(uid)
     return json.dumps(data)
 
 
