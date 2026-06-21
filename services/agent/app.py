@@ -70,11 +70,7 @@ def detect_objects() -> str:
     # Store a URL the frontend can use to fetch the annotated image.
     uid = data.get("prediction_uid")
     if uid:
-<<<<<<< HEAD
-        #image_url = f"{YOLO_SERVICE_URL}/predicted/{uid}.jpg"
-=======
 
->>>>>>> return-annotated-image
         _latest_image_url.set(uid)
     return json.dumps(data)
 
