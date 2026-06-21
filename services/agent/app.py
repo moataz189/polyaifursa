@@ -26,6 +26,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
+YOLO_PUBLIC_URL = os.getenv("YOLO_PUBLIC_URL", YOLO_SERVICE_URL)
 MODEL = os.environ.get("MODEL")
 
 # Text-only models
@@ -47,31 +48,27 @@ SYSTEM_PROMPT = (
 )
 
 _current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
-_latest_image_url = ContextVar("latest_image_url", default=None)
+
 
 
 @tool
 def detect_objects() -> str:
     """Detect and identify objects in the image provided by the user using YOLO object detection."""
     image_b64 = _current_image_b64.get()
-    
+
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
     image_bytes = base64.b64decode(image_b64)
+
     with httpx.Client(timeout=30.0) as client:
         response = client.post(
             f"{YOLO_SERVICE_URL}/predict",
             files={"file": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
         )
         response.raise_for_status()
-    data = response.json()
-    # YOLO returns the prediction id as "prediction_uid".
-    # Store a URL the frontend can use to fetch the annotated image.
-    uid = data.get("prediction_uid")
-    if uid:
 
-        _latest_image_url.set(uid)
+    data = response.json()
     return json.dumps(data)
 
 
@@ -83,7 +80,7 @@ TOOLS = {
 llm = init_chat_model(MODEL, temperature=0)
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 
-def run_agent(history: list, max_iterations: int = 10) -> str:
+def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]:
     """
     Simple ReAct loop:
       1. Send messages to the LLM.
@@ -92,6 +89,7 @@ def run_agent(history: list, max_iterations: int = 10) -> str:
       4. Stop after max_iterations to prevent infinite loops.
     """
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
+    image_url = None
 
     iterations = 0
 
@@ -103,7 +101,7 @@ def run_agent(history: list, max_iterations: int = 10) -> str:
 
         # No tool calls, the model produced its final answer
         if not response.tool_calls:
-            return response.content
+            return response.content, image_url
 
         # Execute every tool the model requested
         for tool_call in response.tool_calls:
@@ -111,7 +109,14 @@ def run_agent(history: list, max_iterations: int = 10) -> str:
             tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
 
-    return "Agent stopped: maximum iterations reached."
+            if tool_call["name"] == "detect_objects":
+                tool_data = json.loads(tool_result.content)
+                prediction_uid = tool_data.get("prediction_uid")
+
+                if prediction_uid:
+                    image_url = f"{YOLO_PUBLIC_URL}/prediction/{prediction_uid}/image"
+
+    return "Agent stopped: maximum iterations reached.", image_url
 
 app = FastAPI(title="Vision Agent")
 
@@ -158,17 +163,14 @@ def chat(request: ChatRequest):
             lc_messages.append(AIMessage(content=msg.content))
 
     token_image = _current_image_b64.set(latest_image)
-    token_url = _latest_image_url.set(None)
+    
 
     try:
-        answer = run_agent(lc_messages)
-        return ChatResponse(
-            response=answer,
-            image_url=_latest_image_url.get(),
-        )
+        answer, image_url = run_agent(lc_messages)
+        return ChatResponse(response=answer, image_url=image_url)
     finally:
         _current_image_b64.reset(token_image)
-        _latest_image_url.reset(token_url)
+        
 
 @app.get("/health")
 def health():
