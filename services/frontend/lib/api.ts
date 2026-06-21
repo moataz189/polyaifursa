@@ -2,7 +2,14 @@ import type { ChatMessage } from "./types";
 
 const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000";
 
-export async function sendMessage(messages: ChatMessage[]): Promise<string> {
+export interface SendMessageResult {
+  response: string;
+  imageUrl: string | null;
+}
+
+export async function sendMessage(
+  messages: ChatMessage[]
+): Promise<SendMessageResult> {
   const res = await fetch(`${AGENT_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -13,5 +20,10 @@ export async function sendMessage(messages: ChatMessage[]): Promise<string> {
     throw new Error(text || res.statusText);
   }
   const data = await res.json();
-  return data.response as string;
+  return {
+    response: data.response as string,
+    // The agent returns a relative path (e.g. "/image/<uid>").
+    // Turn it into an absolute URL pointing at the agent service.
+    imageUrl: data.image_url ? `${AGENT_URL}${data.image_url}` : null,
+  };
 }
