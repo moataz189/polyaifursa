@@ -17,8 +17,9 @@ logging.getLogger("langchain").setLevel(logging.DEBUG)
 logging.getLogger("langchain_core").setLevel(logging.DEBUG)
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -65,9 +66,15 @@ def detect_objects() -> str:
         )
         response.raise_for_status()
     data = response.json()
-    uid = data.get("uid")
+    # YOLO returns the prediction id as "prediction_uid".
+    # Store a URL the frontend can use to fetch the annotated image.
+    uid = data.get("prediction_uid")
     if uid:
+<<<<<<< HEAD
         #image_url = f"{YOLO_SERVICE_URL}/predicted/{uid}.jpg"
+=======
+
+>>>>>>> return-annotated-image
         _latest_image_url.set(uid)
     return json.dumps(data)
 
