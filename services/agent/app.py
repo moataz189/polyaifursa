@@ -113,7 +113,7 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
                 prediction_uid = tool_data.get("prediction_uid")
 
                 if prediction_uid:
-                    image_url = f"{YOLO_PUBLIC_URL}/prediction/{prediction_uid}/image"
+                    image_url = f"{YOLO_SERVICE_URL}/prediction/{prediction_uid}/image"
 
     return "Agent stopped: maximum iterations reached.", image_url
 
@@ -162,14 +162,14 @@ def chat(request: ChatRequest):
             lc_messages.append(AIMessage(content=msg.content))
 
     token_image = _current_image_b64.set(latest_image)
-    token_url = _latest_image_url.set(None)
+    
 
     try:
         answer, image_url = run_agent(lc_messages)
         return ChatResponse(response=answer, image_url=image_url)
     finally:
         _current_image_b64.reset(token_image)
-        _latest_image_url.reset(token_url)
+        
 
 @app.get("/health")
 def health():
