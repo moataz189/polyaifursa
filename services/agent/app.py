@@ -100,7 +100,10 @@ app = FastAPI(title="Vision Agent")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+     allow_origins=[
+        "http://moataz-prod.fursa.click:3000",
+        "http://moataz-dev.fursa.click:3000","http://localhost:3000"
+    ],
     allow_methods=["POST", "GET"],
     allow_headers=["Content-Type"],
 )
