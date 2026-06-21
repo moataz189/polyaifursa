@@ -1,0 +1,15 @@
+[Unit]
+Description=PolyAI Agent
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polyaifursa/services/agent
+EnvironmentFile=/home/ubuntu/polyaifursa/services/agent/.env
+ExecStart=/home/ubuntu/polyaifursa/.venv/bin/python app.py
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
