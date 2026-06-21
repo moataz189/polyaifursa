@@ -74,12 +74,6 @@ def detect_objects() -> str:
         response.raise_for_status()
 
     data = response.json()
-
-    # Remember the UID so show_annotated_image can build the URL later.
-    prediction_uid = data.get("prediction_uid")
-    if prediction_uid:
-        _latest_prediction_uid.set(prediction_uid)
-
     return json.dumps(data)
 
 
@@ -138,6 +132,14 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
             tool_fn = TOOLS[tool_call["name"]]
             tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
+
+            if tool_call["name"] == "detect_objects":
+                # Store the UID in THIS context so a later show_annotated_image
+                # call (which runs in a child context) can read it.
+                tool_data = json.loads(tool_result.content)
+                prediction_uid = tool_data.get("prediction_uid")
+                if prediction_uid:
+                    _latest_prediction_uid.set(prediction_uid)
 
             if tool_call["name"] == "show_annotated_image":
                 tool_data = json.loads(tool_result.content)
