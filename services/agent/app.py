@@ -46,11 +46,14 @@ SYSTEM_PROMPT = (
 )
 
 _current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
+_latest_image_url = ContextVar("latest_image_url", default=None)
+
 
 @tool
 def detect_objects() -> str:
     """Detect and identify objects in the image provided by the user using YOLO object detection."""
     image_b64 = _current_image_b64.get()
+    
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -61,7 +64,11 @@ def detect_objects() -> str:
             files={"file": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
         )
         response.raise_for_status()
-    return json.dumps(response.json())
+    data = response.json()
+    uid = data.get("uid")
+    if uid:
+     _latest_image_url.set(uid)
+    return json.dumps(data)
 
 
 # Registry: map tool name -> tool function
@@ -127,6 +134,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    image_url: str | None = None
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -145,12 +153,18 @@ def chat(request: ChatRequest):
         else:
             lc_messages.append(AIMessage(content=msg.content))
 
-    token = _current_image_b64.set(latest_image)
-    try:
-        return ChatResponse(response=run_agent(lc_messages))
-    finally:
-        _current_image_b64.reset(token)
+    token_image = _current_image_b64.set(latest_image)
+    token_url = _latest_image_url.set(None)
 
+    try:
+        answer = run_agent(lc_messages)
+        return ChatResponse(
+            response=answer,
+            image_url=_latest_image_url.get(),
+        )
+    finally:
+        _current_image_b64.reset(token_image)
+        _latest_image_url.reset(token_url)
 
 @app.get("/health")
 def health():
