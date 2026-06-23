@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import time
 from contextvars import ContextVar
 from typing import Optional
 
@@ -106,18 +107,48 @@ TOOLS = {
 llm = init_chat_model(MODEL, temperature=0)
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 
-def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]:
+
+def _fetch_annotated_image_b64(prediction_uid: Optional[str]) -> Optional[str]:
+    """Download the annotated image for a prediction from YOLO and return it
+    as a base64 string. Returns None if there is no prediction or the fetch fails.
+
+    This runs outside the LLM message flow so the model never sees image data.
+    """
+    if not prediction_uid:
+        return None
+
+    url = f"{YOLO_SERVICE_URL}/prediction/{prediction_uid}/image"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logging.warning("Failed to fetch annotated image from %s: %s", url, exc)
+        return None
+
+    logging.info("Fetched annotated image for prediction %s (%d bytes)", prediction_uid, len(response.content))
+    return base64.b64encode(response.content).decode("ascii")
+
+
+def run_agent(history: list, max_iterations: int = 10) -> dict:
     """
     Simple ReAct loop:
       1. Send messages to the LLM.
       2. If the LLM requests tool calls, execute them and append results.
       3. Repeat until the LLM returns a plain text response.
       4. Stop after max_iterations to prevent infinite loops.
+
+    Returns a dict with the final answer plus metadata about the loop.
     """
+    start_time = time.perf_counter()
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
     image_url = None
-
+    annotated_image = None
+    prediction_uid = None
+    tools_called: list[str] = []
     iterations = 0
+    context_limit_exceeded = False
+    answer = "Agent stopped: maximum iterations reached."
 
     while iterations < max_iterations:
         iterations += 1
@@ -127,13 +158,24 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
 
         # No tool calls, the model produced its final answer
         if not response.tool_calls:
-            return response.content, image_url
+            answer = response.content
+            break
 
         # Execute every tool the model requested
         for tool_call in response.tool_calls:
             tool_fn = TOOLS[tool_call["name"]]
             tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
+            tools_called.append(tool_call["name"])
+
+            if tool_call["name"] == "detect_objects":
+                # Store the UID in THIS context so a later show_annotated_image
+                # call (which runs in a child context) can read it.
+                tool_data = json.loads(tool_result.content)
+                uid = tool_data.get("prediction_uid")
+                if uid:
+                    prediction_uid = uid
+                    _latest_prediction_uid.set(uid)
 
             if tool_call["name"] == "detect_objects":
                 # Store the UID in THIS context so a later show_annotated_image
@@ -146,8 +188,26 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, str | None]
             if tool_call["name"] == "show_annotated_image":
                 tool_data = json.loads(tool_result.content)
                 image_url = tool_data.get("image_url") or image_url
+                # Fetch the annotated image bytes from YOLO and base64-encode
+                # them here, OUTSIDE the LLM message flow, so the model never
+                # sees image data (text-only architecture constraint).
+                annotated_image = _fetch_annotated_image_b64(prediction_uid) or annotated_image
+    else:
+        # The while loop finished without `break`, meaning we hit max_iterations.
+        context_limit_exceeded = True
 
-    return "Agent stopped: maximum iterations reached.", image_url
+    agent_loop_time_s = round(time.perf_counter() - start_time, 3)
+
+    return {
+        "response": answer,
+        "image_url": image_url,
+        "annotated_image": annotated_image,
+        "prediction_id": prediction_uid,
+        "iterations": iterations,
+        "tools_called": tools_called,
+        "context_limit_exceeded": context_limit_exceeded,
+        "agent_loop_time_s": agent_loop_time_s,
+    }
 
 app = FastAPI(title="Vision Agent")
 
@@ -174,6 +234,13 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    prediction_id: str | None = None
+    annotated_image: str | None = None
+    agent_loop_time_s: float
+    iterations: int
+    tools_called: list[str]
+    context_limit_exceeded: bool
+    # Kept for backward compatibility with existing frontend clients.
     image_url: str | None = None
 
 
@@ -198,8 +265,17 @@ def chat(request: ChatRequest):
     
 
     try:
-        answer, image_url = run_agent(lc_messages)
-        return ChatResponse(response=answer, image_url=image_url)
+        result = run_agent(lc_messages)
+        return ChatResponse(
+            response=result["response"],
+            prediction_id=result["prediction_id"],
+            annotated_image=result["annotated_image"],
+            agent_loop_time_s=result["agent_loop_time_s"],
+            iterations=result["iterations"],
+            tools_called=result["tools_called"],
+            context_limit_exceeded=result["context_limit_exceeded"],
+            image_url=result["image_url"],
+        )
     finally:
         _current_image_b64.reset(token_image)
         _latest_prediction_uid.reset(token_prediction)

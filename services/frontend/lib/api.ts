@@ -5,6 +5,7 @@ const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000";
 export interface SendMessageResult {
   response: string;
   imageUrl: string | null;
+  annotatedImage: string | null;
 }
 
 export async function sendMessage(
@@ -25,5 +26,7 @@ export async function sendMessage(
     // The agent returns a relative path (e.g. "/image/<uid>").
     // Turn it into an absolute URL pointing at the agent service.
     imageUrl: data.image_url ?? null,
+    // Base64-encoded annotated image (with bounding boxes), or null.
+    annotatedImage: data.annotated_image ?? null,
   };
 }
