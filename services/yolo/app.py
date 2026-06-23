@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
+from pydantic import BaseModel
 from ultralytics import YOLO
 from PIL import Image
 import sqlite3
@@ -49,6 +50,14 @@ DB_PATH = "predictions.db"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PREDICTED_DIR, exist_ok=True)
+
+
+class PredictionResponse(BaseModel):
+    prediction_uid: str
+    detection_count: int
+    labels: list[str]
+    time_took: float
+
 
 # Download the AI model (tiny model ~6MB)
 model = YOLO("yolov8n.pt")  
@@ -104,7 +113,7 @@ def save_detection_object(prediction_uid, label, score, box):
             VALUES (?, ?, ?, ?)
         """, (prediction_uid, label, score, str(box)))
         conn.commit()
-@app.post("/predict")
+@app.post("/predict", response_model=PredictionResponse)
 def predict(file: UploadFile = File(...)):
     """
     Predict objects in an image
