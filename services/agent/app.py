@@ -105,6 +105,17 @@ TOOLS = {
 }
 
 llm = init_chat_model(MODEL, temperature=0)
+
+# Validate that the selected model supports tool calling before starting up.
+# The model profile exposes its declared capabilities; if tool calling is not
+# supported the agent cannot work, so fail fast with a clear startup error.
+profile = getattr(llm, "profile", None)
+if not profile or not profile.get("tool_calling"):
+    raise SystemExit(
+        f"\n[ERROR] MODEL='{MODEL}' does not support tool calling.\n"
+        f"Select a model whose profile reports tool_calling support.\n"
+    )
+
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 
 
@@ -149,12 +160,22 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
     iterations = 0
     context_limit_exceeded = False
     answer = "Agent stopped: maximum iterations reached."
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
 
     while iterations < max_iterations:
         iterations += 1
 
         response: AIMessage = llm_with_tools.invoke(messages)
         messages.append(response)
+
+        # Accumulate token usage across every LLM call in the loop.
+        usage = response.usage_metadata
+        if usage:
+            input_tokens += usage.get("input_tokens", 0)
+            output_tokens += usage.get("output_tokens", 0)
+            total_tokens += usage.get("total_tokens", 0)
 
         # No tool calls, the model produced its final answer
         if not response.tool_calls:
@@ -177,13 +198,6 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                     prediction_uid = uid
                     _latest_prediction_uid.set(uid)
 
-            if tool_call["name"] == "detect_objects":
-                # Store the UID in THIS context so a later show_annotated_image
-                # call (which runs in a child context) can read it.
-                tool_data = json.loads(tool_result.content)
-                prediction_uid = tool_data.get("prediction_uid")
-                if prediction_uid:
-                    _latest_prediction_uid.set(prediction_uid)
 
             if tool_call["name"] == "show_annotated_image":
                 tool_data = json.loads(tool_result.content)
@@ -207,6 +221,11 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         "tools_called": tools_called,
         "context_limit_exceeded": context_limit_exceeded,
         "agent_loop_time_s": agent_loop_time_s,
+        "tokens_used": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
+        },
     }
 
 app = FastAPI(title="Vision Agent")
@@ -232,6 +251,12 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]         # full conversation thread, oldest first
 
 
+class TokensUsed(BaseModel):
+    input: int
+    output: int
+    total: int
+
+
 class ChatResponse(BaseModel):
     response: str
     prediction_id: str | None = None
@@ -240,6 +265,7 @@ class ChatResponse(BaseModel):
     iterations: int
     tools_called: list[str]
     context_limit_exceeded: bool
+    tokens_used: TokensUsed
     # Kept for backward compatibility with existing frontend clients.
     image_url: str | None = None
 
@@ -274,6 +300,7 @@ def chat(request: ChatRequest):
             iterations=result["iterations"],
             tools_called=result["tools_called"],
             context_limit_exceeded=result["context_limit_exceeded"],
+            tokens_used=TokensUsed(**result["tokens_used"]),
             image_url=result["image_url"],
         )
     finally:
