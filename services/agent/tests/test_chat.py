@@ -1,4 +1,5 @@
 import os
+import time
 
 # Configure the environment BEFORE importing the app module, because app.py
 # validates MODEL and builds the LLM client at import time.
@@ -7,6 +8,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.rate_limiters import InMemoryRateLimiter
 
 import app as app_module
 from app import app
@@ -101,3 +103,37 @@ def test_chat_context_limit_exceeded(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["context_limit_exceeded"] is True
+
+
+def test_llm_has_in_memory_rate_limiter():
+    # The chat model must be initialized with a rate limiter, and it must be
+    # an InMemoryRateLimiter configured for a single-user dev deployment.
+    rate_limiter = app_module.llm.rate_limiter
+
+    assert rate_limiter is not None
+    assert isinstance(rate_limiter, InMemoryRateLimiter)
+    assert rate_limiter.requests_per_second == 1
+    assert rate_limiter.max_bucket_size == 5
+
+
+def test_rate_limiter_delays_when_bucket_exhausted():
+    # Behavioral test: a dedicated limiter (NOT the app's global one) with a
+    # bucket size of 1 and 1 token/sec. The first acquire drains the bucket;
+    # the second must wait ~1s for a token to refill.
+    limiter = InMemoryRateLimiter(
+        requests_per_second=1,
+        check_every_n_seconds=0.01,
+        max_bucket_size=1,
+    )
+
+    # Consume the only available token immediately (should not block).
+    assert limiter.acquire(blocking=True) is True
+
+    # The bucket is now empty; the next token costs ~1 second to refill.
+    start = time.perf_counter()
+    assert limiter.acquire(blocking=True) is True
+    elapsed = time.perf_counter() - start
+
+    # Allow generous tolerance so the test is not flaky on slow/busy machines:
+    # it must clearly wait (not instant) but stay in a reasonable upper bound.
+    assert 0.8 <= elapsed <= 2.0

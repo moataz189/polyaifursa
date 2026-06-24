@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
@@ -104,7 +105,15 @@ TOOLS = {
     show_annotated_image.name: show_annotated_image,
 }
 
-llm = init_chat_model(MODEL, temperature=0)
+# Throttle outbound LLM requests. Realistic values for a single-user dev
+# deployment: ~1 request/sec with a small burst allowance.
+rate_limiter = InMemoryRateLimiter(
+    requests_per_second=1,
+    check_every_n_seconds=0.1,
+    max_bucket_size=5,
+)
+
+llm = init_chat_model(MODEL, temperature=0, rate_limiter=rate_limiter)
 
 # Validate that the selected model supports tool calling before starting up.
 # The model profile exposes its declared capabilities; if tool calling is not
