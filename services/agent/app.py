@@ -33,8 +33,13 @@ MODEL = os.environ.get("MODEL")
 
 # Text-only models
 ALLOWED_MODELS = {
-    "openai:gpt-5.4-mini",
-    "anthropic:claude-haiku-4-5",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "amazon.nova-micro-v1:0",
+    "amazon.nova-lite-v1:0",
+    "openai.gpt-oss-20b-1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "mistral.mistral-7b-instruct-v0:2",
+    
 }
 
 if MODEL not in ALLOWED_MODELS:
@@ -113,17 +118,15 @@ rate_limiter = InMemoryRateLimiter(
     max_bucket_size=5,
 )
 
-llm = init_chat_model(MODEL, temperature=0, rate_limiter=rate_limiter)
+llm = init_chat_model(
+    "openai.gpt-oss-20b-1:0",
+    model_provider="bedrock_converse",
+    region_name="us-east-1",rate_limiter=rate_limiter
+)
 
 # Validate that the selected model supports tool calling before starting up.
 # The model profile exposes its declared capabilities; if tool calling is not
 # supported the agent cannot work, so fail fast with a clear startup error.
-profile = getattr(llm, "profile", None)
-if not profile or not profile.get("tool_calling"):
-    raise SystemExit(
-        f"\n[ERROR] MODEL='{MODEL}' does not support tool calling.\n"
-        f"Select a model whose profile reports tool_calling support.\n"
-    )
 
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 
@@ -188,7 +191,10 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
 
         # No tool calls, the model produced its final answer
         if not response.tool_calls:
-            answer = response.content
+            # Some providers (e.g. Bedrock Converse) return content as a list of
+            # blocks (reasoning + text) instead of a plain string. `.text`
+            # concatenates the text blocks and drops reasoning, giving us a str.
+            answer = response.text
             break
 
         # Execute every tool the model requested
