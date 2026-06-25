@@ -4,6 +4,7 @@ python-dotenv
 langchain
 langgraph
 langchain-core
+langchain-aws
 
 langchain[openai]
 langchain[anthropic]
