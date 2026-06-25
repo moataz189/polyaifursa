@@ -51,8 +51,7 @@ jobs:
       - name: Run agent tests
         working-directory: services/agent
         env:
-          # Dummy values so app.py import-time validation passes. The tests
-          # mock the LLM/YOLO calls, so no real API key is ever used.
-          MODEL: openai:gpt-5.4-mini
-          OPENAI_API_KEY: test-key
+          MODEL: anthropic.claude-3-haiku-20240307-v1:0
+          MODEL_PROVIDER: bedrock_converse
+          AWS_REGION: us-east-1
         run: pytest tests/
