@@ -4,6 +4,7 @@ python-dotenv
 langchain
 langgraph
 langchain-core
+langchain-aws
 
 langchain[openai]
 langchain[anthropic]
@@ -14,3 +15,4 @@ pydantic
 
 pytest>=7.0.0
 pytest-cov>=4.1.0
+langchain-aws
