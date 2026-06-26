@@ -30,7 +30,8 @@ from pydantic import BaseModel
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
 YOLO_PUBLIC_URL = os.getenv("YOLO_PUBLIC_URL", YOLO_SERVICE_URL)
 MODEL = os.environ.get("MODEL")
-
+MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "bedrock_converse")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # Text-only models
 ALLOWED_MODELS = {
     "anthropic.claude-3-haiku-20240307-v1:0",
@@ -119,9 +120,9 @@ rate_limiter = InMemoryRateLimiter(
 )
 
 llm = init_chat_model(
-    "openai.gpt-oss-20b-1:0",
-    model_provider="bedrock_converse",
-    region_name="us-east-1",rate_limiter=rate_limiter
+    MODEL,
+    model_provider=MODEL_PROVIDER,
+    region_name=AWS_REGION,rate_limiter=rate_limiter
 )
 
 # Validate that the selected model supports tool calling before starting up.
