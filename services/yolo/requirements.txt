@@ -20,4 +20,3 @@ prometheus-fastapi-instrumentator>=6.0.0
 pytest>=7.0.0
 pytest-cov>=4.1.0
 pytest-html==3.2.0
-langchain-aws
