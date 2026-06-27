@@ -48,4 +48,4 @@ services/frontend/out/
 
 coverage.xml
 htmlcov/
-verification-report.md
+.agents/skills/data-layer/evals/verification-report.md
