@@ -2,16 +2,36 @@ import os
 import unittest
 import tempfile
 from fastapi.testclient import TestClient
-import app as app_module
-from app import app, init_db
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+
+from app import app
+from db import get_db
+from models import Base
 
 TEST_IMAGE = os.path.join(os.path.dirname(__file__), "data", "beatles.jpeg")
 
 
 class TestPredictionTime(unittest.TestCase):
     def setUp(self):
-        _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
-        init_db()
+        _, db_path = tempfile.mkstemp(suffix=".db")
+        engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"check_same_thread": False},
+            poolclass=NullPool,
+        )
+        TestSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        Base.metadata.create_all(bind=engine)
+
+        def override_get_db():
+            db = TestSessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app)
 
     def test_predict_includes_processing_time(self):

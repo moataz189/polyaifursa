@@ -1,26 +1,46 @@
-import sqlite3
 import tempfile
 from fastapi.testclient import TestClient
-import app as app_module
-from app import app, init_db
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+
+from app import app
+from db import get_db
+from models import Base, DetectionObject
 
 
 def setup_db():
-    _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
-    init_db()
-    return TestClient(app)
+    _, db_path = tempfile.mkstemp(suffix=".db")
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    TestSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    return TestClient(app), TestSessionLocal
 
 
 def test_get_predictions_by_score_found():
-    client = setup_db()
+    client, session_local = setup_db()
 
-    with sqlite3.connect(app_module.DB_PATH) as conn:
-        conn.execute("""
-            INSERT INTO detection_objects
-            (prediction_uid, label, score, box)
-            VALUES (?, ?, ?, ?)
-        """, ("abc-123", "person", 0.91, "[10, 20, 100, 200]"))
-        conn
+    with session_local() as db:
+        db.add(DetectionObject(
+            prediction_uid="abc-123",
+            label="person",
+            score=0.91,
+            box="[10, 20, 100, 200]"
+        ))
+        db.commit()
 
     response = client.get("/predictions/score/0.5")
 
@@ -35,15 +55,16 @@ def test_get_predictions_by_score_found():
 
 
 def test_get_predictions_by_score_no_matches():
-    client = setup_db()
+    client, session_local = setup_db()
 
-    with sqlite3.connect(app_module.DB_PATH) as conn:
-        conn.execute("""
-            INSERT INTO detection_objects
-            (prediction_uid, label, score, box)
-            VALUES (?, ?, ?, ?)
-        """, ("abc-123", "person", 0.20, "[10, 20, 100, 200]"))
-        conn.commit()
+    with session_local() as db:
+        db.add(DetectionObject(
+            prediction_uid="abc-123",
+            label="person",
+            score=0.20,
+            box="[10, 20, 100, 200]"
+        ))
+        db.commit()
 
     response = client.get("/predictions/score/0.5")
 
@@ -52,8 +73,8 @@ def test_get_predictions_by_score_no_matches():
 
 
 def test_get_predictions_by_score_invalid_score():
-    client = setup_db()
-#   check for score less than 0.0
+    client, _ = setup_db()
+
     response = client.get("/predictions/score/1.5")
 
     assert response.status_code == 400
