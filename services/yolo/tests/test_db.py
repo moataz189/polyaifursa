@@ -26,12 +26,17 @@ def test_postgres_database_url_configuration(monkeypatch):
     # Set environment variables for PostgreSQL
     monkeypatch.setenv("DB_BACKEND", "postgres")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:password@localhost/predictions")
-    
+
+    # Mock create_engine so reloading db.py does not require the psycopg2
+    # driver. We only want to verify DATABASE_URL configuration here, not
+    # build a real PostgreSQL engine.
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *args, **kwargs: None)
+
     # Reimport db module to pick up new environment variables
     import importlib
     import db as db_module
     importlib.reload(db_module)
-    
+
     assert db_module.DATABASE_URL == "postgresql://user:password@localhost/predictions"
 
 
