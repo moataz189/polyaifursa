@@ -48,3 +48,4 @@ services/frontend/out/
 
 coverage.xml
 htmlcov/
+verification-report.md
