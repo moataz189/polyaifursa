@@ -17,7 +17,13 @@ export default function Chat() {
 
   // Generated once when the chat starts; sent with every /chat request so the
   // backend groups all images of this conversation under a stable chat_id.
-  const chatIdRef = useRef<string>(crypto.randomUUID());
+ function generateChatId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
   // Most recent prediction id returned by the backend. Sent on the next
   // request so a later "show annotated image" can find the prior detection.
