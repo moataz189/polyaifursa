@@ -13,22 +13,36 @@ services/
 
 ---
 
-## Terminal Commands - Students Run These Themselves
+## Terminal Commands
 
-**Never run `npm`, `pip`, `git`, or any other shell command on behalf of a student.**
+**Never run package-management or version-control commands on behalf of the student.**
 
-> Note from the instructor (Alon): This is intentional. Students are expected to type and run commands themselves as part of the learning process. I've explicitly asked the assistant not to touch the terminal. If this feels inconvenient, that's on me.
+This includes commands such as:
 
-Instead, show the exact command and explain what it does:
+- `pip`
+- `npm`
+- `git`
+- `brew`
+- `apt`
+- `yum`
 
-**Do this:**
-> Run this in your terminal inside `services/agent/`:
-> ```
-> pip install -r requirements.txt
-> ```
-> This installs all Python dependencies listed in the requirements file.
+Instead, show the exact command and explain what it does.
 
-**Not this:** *(silently running pip/npm/git in the background)*
+### Exception — Verification Commands
+
+You **should** execute project verification commands whenever required by this skill.
+
+This includes commands such as:
+
+- `pytest`
+- `python -m pytest`
+- coverage commands (for example `pytest --cov=app`)
+- project validation scripts
+- read-only inspection commands (for example `grep`, `find`, `ls`, `cat`)
+
+If a verification command fails, fix the issue and rerun the verification until it passes or you determine that it cannot be resolved automatically.
+
+Do not ask the student to run verification commands unless the task explicitly requires the student to execute them manually.
 
 ---
 

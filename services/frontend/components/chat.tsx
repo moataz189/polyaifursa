@@ -28,7 +28,7 @@ export default function Chat() {
   // Most recent prediction id returned by the backend. Sent on the next
   // request so a later "show annotated image" can find the prior detection.
   const latestPredictionIdRef = useRef<string | null>(null);
-
+  const chatIdRef = useRef<string>(generateChatId());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
