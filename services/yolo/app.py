@@ -14,7 +14,7 @@ import signal
 import sys
 from dotenv import load_dotenv
 load_dotenv()
-
+from datetime import datetime, timezone
 from s3 import (
     download_image,
     upload_image,
@@ -108,7 +108,7 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
 
     session = PredictionSession(
         uid=uid,
-        timestamp=time.time(),
+        timestamp=datetime.now(timezone.utc),
         original_image=image_s3_key,
         predicted_image=predicted_s3_key,
     )
