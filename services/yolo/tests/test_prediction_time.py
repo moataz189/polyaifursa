@@ -1,6 +1,7 @@
 import os
 import unittest
 import tempfile
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -34,12 +35,30 @@ class TestPredictionTime(unittest.TestCase):
         app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app)
 
-    def test_predict_includes_processing_time(self):
         with open(TEST_IMAGE, "rb") as f:
-            response = self.client.post(
-                "/predict",
-                files={"file": ("beatles.jpeg", f, "image/jpeg")}
-            )
+            image_bytes = f.read()
+
+        # Mock boto3 so predict never touches real AWS.
+        self._download_patch = patch.object(
+            app_module, "download_image", lambda key: image_bytes
+        )
+        self._upload_patch = patch.object(
+            app_module,
+            "upload_image",
+            lambda key, data, content_type="image/jpeg": key,
+        )
+        self._download_patch.start()
+        self._upload_patch.start()
+
+    def tearDown(self):
+        self._download_patch.stop()
+        self._upload_patch.stop()
+
+    def test_predict_includes_processing_time(self):
+        response = self.client.post(
+            "/predict",
+            json={"image_s3_key": "chat-1/pred-1/original/beatles.jpeg"},
+        )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -50,7 +69,7 @@ class TestPredictionTime(unittest.TestCase):
     def test_predict_rejects_non_image_file(self):
         response = self.client.post(
             "/predict",
-            files={"file": ("test.txt", b"hello", "text/plain")}
+            json={"image_s3_key": "chat-1/pred-1/original/notes.txt"},
         )
 
         self.assertEqual(response.status_code, 400)

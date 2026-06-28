@@ -11,8 +11,17 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [imageB64, setImageB64] = useState<string | null>(null);
+  const [imageFilename, setImageFilename] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Generated once when the chat starts; sent with every /chat request so the
+  // backend groups all images of this conversation under a stable chat_id.
+  const chatIdRef = useRef<string>(crypto.randomUUID());
+
+  // Most recent prediction id returned by the backend. Sent on the next
+  // request so a later "show annotated image" can find the prior detection.
+  const latestPredictionIdRef = useRef<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -29,6 +38,7 @@ export default function Chat() {
     reader.onload = () => {
       const result = reader.result as string;
       setImageB64(result.split(",")[1]);
+      setImageFilename(file.name);
       setImagePreview(result);
     };
     reader.readAsDataURL(file);
@@ -49,18 +59,22 @@ export default function Chat() {
       role: "user",
       content: input.trim() || "What's in this image?",
       ...(imageB64 ? { image_base64: imageB64 } : {}),
+      ...(imageB64 && imageFilename ? { image_filename: imageFilename } : {}),
     };
 
     const next = [...messages, userMessage];
     setMessages(next);
     setInput("");
     setImageB64(null);
+    setImageFilename(null);
     setImagePreview(null);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setLoading(true);
 
     try {
-      const { response, imageUrl, annotatedImage } = await sendMessage(next);
+      const { response, imageUrl, annotatedImage, predictionId } =
+        await sendMessage(chatIdRef.current, next, latestPredictionIdRef.current);
+      if (predictionId) latestPredictionIdRef.current = predictionId;
       setMessages([
         ...next,
         {
@@ -130,6 +144,7 @@ export default function Chat() {
             <button
               onClick={() => {
                 setImageB64(null);
+                setImageFilename(null);
                 setImagePreview(null);
               }}
               className="absolute -top-2 -right-2 bg-background border rounded-full p-0.5 hover:bg-muted"

@@ -139,3 +139,61 @@ def test_run_agent_stops_at_max_iterations(monkeypatch):
     assert result["context_limit_exceeded"] is True
     assert result["iterations"] == 3
     assert result["response"] == "Agent stopped: maximum iterations reached."
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHTTPClient:
+    """Records the request sent by detect_objects and returns a fixed response."""
+
+    def __init__(self, *args, **kwargs):
+        self.last_post = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def post(self, url, json=None, **kwargs):
+        self.last_post = {"url": url, "json": json}
+        _FakeHTTPClient.captured = self.last_post
+        return _FakeResponse({"prediction_uid": "abc-123", "labels": ["person"]})
+
+
+def test_detect_objects_sends_s3_key(monkeypatch):
+    # detect_objects must send only the S3 key as JSON, not raw image bytes.
+    monkeypatch.setattr(app_module.httpx, "Client", _FakeHTTPClient)
+
+    token = app_module._current_image_s3_key.set("chat-1/pred-1/original/image.jpg")
+    try:
+        raw = app_module.detect_objects.invoke({})
+    finally:
+        app_module._current_image_s3_key.reset(token)
+
+    data = json.loads(raw)
+    assert data["prediction_uid"] == "abc-123"
+    assert _FakeHTTPClient.captured["json"] == {
+        "image_s3_key": "chat-1/pred-1/original/image.jpg"
+    }
+    assert _FakeHTTPClient.captured["url"].endswith("/predict")
+
+
+def test_detect_objects_without_image_returns_error():
+    token = app_module._current_image_s3_key.set(None)
+    try:
+        raw = app_module.detect_objects.invoke({})
+    finally:
+        app_module._current_image_s3_key.reset(token)
+
+    assert json.loads(raw) == {"error": "No image was provided by the user."}
+
