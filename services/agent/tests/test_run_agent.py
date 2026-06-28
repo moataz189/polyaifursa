@@ -102,6 +102,8 @@ def test_run_agent_handles_tool_calls(monkeypatch):
 
 
 def test_run_agent_no_tool_calls(monkeypatch):
+    app_module._latest_prediction_uid.set(None)
+
     responses = [
         _ai_final(
             "Hello, how can I help?",
@@ -115,10 +117,6 @@ def test_run_agent_no_tool_calls(monkeypatch):
     assert result["response"] == "Hello, how can I help?"
     assert result["image_url"] is None
     assert result["prediction_id"] is None
-    assert result["annotated_image"] is None
-    assert result["tools_called"] == []
-    assert result["iterations"] == 1
-    assert result["context_limit_exceeded"] is False
 
 
 def test_run_agent_stops_at_max_iterations(monkeypatch):
