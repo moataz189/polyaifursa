@@ -19,6 +19,10 @@ export default function Chat() {
   // backend groups all images of this conversation under a stable chat_id.
   const chatIdRef = useRef<string>(crypto.randomUUID());
 
+  // Most recent prediction id returned by the backend. Sent on the next
+  // request so a later "show annotated image" can find the prior detection.
+  const latestPredictionIdRef = useRef<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -68,10 +72,9 @@ export default function Chat() {
     setLoading(true);
 
     try {
-      const { response, imageUrl, annotatedImage } = await sendMessage(
-        chatIdRef.current,
-        next
-      );
+      const { response, imageUrl, annotatedImage, predictionId } =
+        await sendMessage(chatIdRef.current, next, latestPredictionIdRef.current);
+      if (predictionId) latestPredictionIdRef.current = predictionId;
       setMessages([
         ...next,
         {

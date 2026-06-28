@@ -170,7 +170,12 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
     image_url = None
     annotated_image = None
-    prediction_uid = None
+    # Seed from the context var, which holds request.latest_prediction_id (set
+    # in chat() before this runs). This lets a follow-up "show annotated image"
+    # request fetch the image for a detection that ran in an EARLIER request,
+    # where detect_objects does not run again. It also makes the returned
+    # prediction_id round-trip so the client keeps a valid id.
+    prediction_uid = _latest_prediction_uid.get()
     tools_called: list[str] = []
     iterations = 0
     context_limit_exceeded = False
@@ -183,6 +188,15 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         iterations += 1
 
         response: AIMessage = llm_with_tools.invoke(messages)
+
+        # Some providers (e.g. Bedrock via gpt-oss) suffix the tool name with
+        # control tokens like "show_annotated_image<|channel|>commentary".
+        # Bedrock requires toolUse.name to match [a-zA-Z0-9_-]+, so sanitize the
+        # names ON THE RESPONSE before it is appended to the history; otherwise
+        # the invalid name is echoed back on the next request and rejected.
+        for tool_call in response.tool_calls:
+            tool_call["name"] = tool_call["name"].split("<|")[0]
+
         messages.append(response)
 
         # Accumulate token usage across every LLM call in the loop.
@@ -203,7 +217,7 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         # Execute every tool the model requested
         
         for tool_call in response.tool_calls:
-            tool_name = tool_call["name"].split("<|")[0]
+            tool_name = tool_call["name"]
 
             if tool_name not in TOOLS:
                 messages.append(
@@ -214,14 +228,13 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                 )
                 continue
 
-            clean_tool_call = {**tool_call, "name": tool_name}
             tool_fn = TOOLS[tool_name]
-            tool_result = tool_fn.invoke(clean_tool_call)
+            tool_result = tool_fn.invoke(tool_call)
 
             messages.append(tool_result)
             tools_called.append(tool_name)
 
-            if tool_call["name"] == "detect_objects":
+            if tool_name == "detect_objects":
                 # Store the UID in THIS context so a later show_annotated_image
                 # call (which runs in a child context) can read it.
                 tool_data = json.loads(tool_result.content)
@@ -231,7 +244,7 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                     _latest_prediction_uid.set(uid)
 
 
-            if tool_call["name"] == "show_annotated_image":
+            if tool_name == "show_annotated_image":
                 tool_data = json.loads(tool_result.content)
                 image_url = tool_data.get("image_url") or image_url
                 # Fetch the annotated image bytes from YOLO and base64-encode
@@ -283,6 +296,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     chat_id: str                        # stable id generated once by the client
     messages: list[ChatMessage]         # full conversation thread, oldest first
+    latest_prediction_id: Optional[str] = None  # prediction_id from a prior response, if any
 
 
 class TokensUsed(BaseModel):
@@ -343,7 +357,7 @@ def chat(request: ChatRequest):
         upload_image(latest_image_s3_key, image_bytes)
 
     token_image = _current_image_s3_key.set(latest_image_s3_key)
-    token_prediction = _latest_prediction_uid.set(None)
+    token_prediction = _latest_prediction_uid.set(request.latest_prediction_id)
     
 
     try:
