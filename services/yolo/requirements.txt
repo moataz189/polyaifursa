@@ -3,6 +3,9 @@ fastapi>=0.95.0
 uvicorn>=0.21.1
 httpx>=0.28.1
 
+# SQLAlchemy ORM
+sqlalchemy>=2.0.0
+
 # Pillow for image handling
 pillow>=9.5.0
 
@@ -20,3 +23,4 @@ prometheus-fastapi-instrumentator>=6.0.0
 pytest>=7.0.0
 pytest-cov>=4.1.0
 pytest-html==3.2.0
+psycopg2-binary

@@ -1,0 +1,55 @@
+{
+  "skill_name": "data-layer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "refactor the YOLO API to use SQLAlchemy instead of raw sqlite",
+      "expected_output": "Creates or modifies models with SQLAlchemy Base models PredictionSession (table prediction_sessions) and DetectionObject (table detection_objects), creates db.py with create_engine, SessionLocal, and a get_db dependency, rewrites every endpoint (/predict, /prediction/{uid}, /prediction/{uid}/image, /predictions/label/{label}, /predictions/score/{min_score}, /image/{type}/{filename}) to use Depends(get_db), removes init_db() and all raw sqlite3/SQL strings from API code, and keeps every endpoint path, status code, and response JSON shape identical."
+    },
+    {
+      "id": 2,
+      "prompt": "add an endpoint GET /predictions/recent that returns the 10 most recent sessions",
+      "expected_output": "Adds a GET /predictions/recent endpoint that queries PredictionSession with SQLAlchemy, orders by timestamp descending, limits results to 10, returns the same session response structure used by existing prediction endpoints, and does not use raw SQL strings or sqlite3."
+    },
+    {
+      "id": 3,
+      "prompt": "add a UserFeedback table to track user ratings per prediction",
+      "expected_output": "Adds a SQLAlchemy UserFeedback model with an id primary key, a prediction_uid foreign key referencing prediction_sessions.uid, a rating field, an optional comment field, and a timestamp field; creates the table through SQLAlchemy metadata (Base.metadata.create_all); and does not use raw CREATE TABLE SQL or init_db()."
+    },
+    {
+      "id": 4,
+      "prompt": "delete a prediction session and all its detection objects by uid",
+      "expected_output": "Implements deletion through the injected SQLAlchemy session, removes the DetectionObject rows for the uid together with the PredictionSession row (via cascade='all, delete-orphan' on the relationship or explicit child deletion in the same transaction), commits, returns a response/status code consistent with the existing API style, and leaves no orphan detection_objects rows."
+    },
+    {
+      "id": 5,
+      "prompt": "make the database backend configurable so we can use postgres in production",
+      "expected_output": "Updates db.py to build DATABASE_URL from environment variables, uses SQLite by default for local development, supports Postgres when DB_BACKEND=postgres, keeps application logic unchanged, and does not hard-code sqlite3 connections inside endpoints."
+    },
+    {
+      "id": 6,
+      "prompt": "write tests for the /predict endpoint after the SQLAlchemy refactor",
+      "expected_output": "Writes pytest HTTP-level tests using FastAPI TestClient, overrides the get_db dependency to a temporary SQLAlchemy-backed SQLite test database, creates tables from SQLAlchemy metadata, mocks the YOLO model instead of loading it, asserts the status code and the existing response body shape ({prediction_uid, detection_count, labels, time_took}), and never touches the real predictions.db."
+    },
+    {
+      "id": 7,
+      "prompt": "while migrating the GET /prediction/{uid} endpoint to SQLAlchemy, also clean up its JSON response to be more consistent",
+      "expected_output": "Refuses to change the response JSON shape or status codes while migrating because existing endpoints and tests depend on them; performs only the sqlite3-to-SQLAlchemy migration using Depends(get_db) and the PredictionSession/DetectionObject models; and returns the exact same response body ({uid, timestamp, original_image, predicted_image, detection_objects:[{id, label, score, box}]}) and status codes."
+    },
+    {
+      "id": 8,
+      "prompt": "we only ship SQLite, so just hard-code the sqlite connection in the endpoints to keep it simple",
+      "expected_output": "Declines to hard-code sqlite connections inside endpoints; keeps the backend configurable via DATABASE_URL/DB_BACKEND environment variables with SQLite as the default, uses Depends(get_db) for sessions, so switching to Postgres later requires only configuration changes and no application-logic edits."
+    },
+    {
+      "id": 9,
+      "prompt": "rename the detection_objects.box column to bbox while you migrate the model to SQLAlchemy",
+      "expected_output": "Declines to rename the column/field because the box key is part of the existing response JSON shape that endpoints (/prediction/{uid}, /predictions/label/{label}, /predictions/score/{min_score}) and tests depend on; keeps the table column and response field named box and performs only the sqlite3-to-SQLAlchemy migration."
+    },
+    {
+      "id": 10,
+      "prompt": "the /predictions/label/{label} endpoint mixes the SQL query and the JSON building in one big function, refactor it during the migration",
+      "expected_output": "Separates the data-access logic (SQLAlchemy queries via Depends(get_db)) from the response formatting, keeps the resulting endpoint path, status codes, and response JSON shape identical, and uses no raw sqlite3 or SQL strings."
+    }
+  ]
+}
