@@ -13,6 +13,15 @@ import time
 from contextlib import closing
 import signal
 import sys
+from dotenv import load_dotenv
+load_dotenv()
+
+from s3 import (
+    download_image,
+    upload_image,
+    derive_predicted_key,
+    parse_prediction_id,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -52,11 +61,16 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PREDICTED_DIR, exist_ok=True)
 
 
+class PredictRequest(BaseModel):
+    image_s3_key: str
+
+
 class PredictionResponse(BaseModel):
     prediction_uid: str
     detection_count: int
     labels: list[str]
     time_took: float
+    predicted_image_s3_key: str
 
 
 # Download the AI model (tiny model ~6MB)
@@ -114,23 +128,29 @@ def save_detection_object(prediction_uid, label, score, box):
         """, (prediction_uid, label, score, str(box)))
         conn.commit()
 @app.post("/predict", response_model=PredictionResponse)
-def predict(file: UploadFile = File(...)):
+def predict(request: PredictRequest):
     """
-    Predict objects in an image
+    Predict objects in an image stored in S3.
+
+    The agent uploads the original image to S3 and sends only its object key.
+    We download it, run detection, then upload the annotated image back to S3.
     """
     start_time = time.time()
-    ext = os.path.splitext(file.filename)[1].lower()
+    image_s3_key = request.image_s3_key
+    ext = os.path.splitext(image_s3_key)[1].lower()
     if ext not in [".jpg", ".jpeg", ".png"]:
         raise HTTPException(
             status_code=400,
             detail="Only image files are supported"
         )
-    uid = str(uuid.uuid4())
+    uid = parse_prediction_id(image_s3_key)
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
 
+    # Download the original image from S3 to a local file for the model.
+    image_bytes = download_image(image_s3_key)
     with open(original_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        f.write(image_bytes)
 
     results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
 
@@ -138,7 +158,12 @@ def predict(file: UploadFile = File(...)):
     annotated_image = Image.fromarray(annotated_frame)
     annotated_image.save(predicted_path)
 
-    save_prediction_session(uid, original_path, predicted_path)
+    # Upload the annotated image back to S3 under the predicted/ prefix.
+    predicted_s3_key = derive_predicted_key(image_s3_key)
+    with open(predicted_path, "rb") as f:
+        upload_image(predicted_s3_key, f.read())
+
+    save_prediction_session(uid, image_s3_key, predicted_s3_key)
     
     detected_labels = []
     for box in results[0].boxes:
@@ -155,7 +180,8 @@ def predict(file: UploadFile = File(...)):
         "prediction_uid": uid, 
         "detection_count": len(results[0].boxes),
         "labels": detected_labels,
-        "time_took": processing_time
+        "time_took": processing_time,
+        "predicted_image_s3_key": predicted_s3_key,
         
     }
 
@@ -196,15 +222,17 @@ def get_prediction_by_uid(uid: str):
 @app.get("/prediction/{uid}/image")
 def get_prediction_image(uid: str):
     """
-    Return the annotated (bounding-box) image for a prediction
+    Return the annotated (bounding-box) image for a prediction, downloaded
+    from S3 using the stored predicted-image object key.
     """
     with closing(sqlite3.connect(DB_PATH)) as conn:
         row = conn.execute(
             "SELECT predicted_image FROM prediction_sessions WHERE uid = ?", (uid,)
         ).fetchone()
-    if not row or not os.path.exists(row[0]):
+    if not row or not row[0]:
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(row[0])
+    image_bytes = download_image(row[0])
+    return Response(content=image_bytes, media_type="image/jpeg")
 
 
 @app.get("/health")

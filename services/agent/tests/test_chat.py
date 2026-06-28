@@ -1,3 +1,4 @@
+import base64
 import os
 import time
 
@@ -11,6 +12,7 @@ from langchain_core.rate_limiters import InMemoryRateLimiter
 
 import app as app_module
 from app import app
+from s3 import safe_image_name
 
 
 @pytest.fixture
@@ -38,7 +40,10 @@ def test_chat_response_schema(client, monkeypatch):
 
     response = client.post(
         "/chat",
-        json={"messages": [{"role": "user", "content": "What is in this image?"}]},
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "What is in this image?"}],
+        },
     )
 
     assert response.status_code == 200
@@ -72,7 +77,10 @@ def test_chat_tokens_used(client, monkeypatch):
 
     response = client.post(
         "/chat",
-        json={"messages": [{"role": "user", "content": "What is in this image?"}]},
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "What is in this image?"}],
+        },
     )
 
     assert response.status_code == 200
@@ -89,6 +97,173 @@ def test_chat_tokens_used(client, monkeypatch):
     assert tokens_used["total"] == 334
 
 
+def test_chat_uploads_original_image_to_s3(client, monkeypatch):
+    # An image in the request must be uploaded to S3, and only its key is kept;
+    # the raw bytes never flow into the agent loop.
+    uploaded = {}
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        uploaded["key"] = key
+        uploaded["data"] = data
+        return key
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: _fake_agent_result())
+
+    # 1x1 PNG pixel, base64 encoded.
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-xyz",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What is in this image?",
+                    "image_base64": image_b64,
+                    "image_filename": "my_photo.png",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    # Key follows <chat_id>/<prediction_id>/original/<image_name> and preserves
+    # the original uploaded filename (never a hard-coded "image.jpg").
+    assert "key" in uploaded
+    parts = uploaded["key"].split("/")
+    assert len(parts) == 4
+    # The client-supplied chat_id is used, not a server-generated one.
+    assert parts[0] == "chat-xyz"
+    assert parts[2] == "original"
+    assert parts[3] == "my_photo.png"
+    # The uploaded bytes match the decoded image.
+    assert uploaded["data"] == base64.b64decode(image_b64)
+
+
+def test_chat_uploads_image_without_filename_uses_fallback(client, monkeypatch):
+    # When no filename is supplied, a generated name is used (no hard-coded
+    # "image.jpg" and no crash).
+    uploaded = {}
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        uploaded["key"] = key
+        return key
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: _fake_agent_result())
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What is in this image?",
+                    "image_base64": image_b64,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    parts = uploaded["key"].split("/")
+    assert parts[0] == "chat-abc"
+    assert parts[2] == "original"
+    # No filename -> fallback "<prediction_id>.jpg" (the prediction id is the
+    # key's second segment). Never the old hard-coded "image.jpg".
+    prediction_id = parts[1]
+    assert parts[3] == f"{prediction_id}.jpg"
+    assert parts[3] != "image.jpg"
+
+
+def test_chat_uploads_only_newest_image(client, monkeypatch):
+    # The conversation history carries an old image, but the latest user
+    # message has a new one. Only the newest image must be uploaded.
+    uploads = []
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        uploads.append(key)
+        return key
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: _fake_agent_result())
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "old image",
+                    "image_base64": image_b64,
+                    "image_filename": "old.png",
+                },
+                {"role": "assistant", "content": "I saw the old image."},
+                {
+                    "role": "user",
+                    "content": "new image",
+                    "image_base64": image_b64,
+                    "image_filename": "new.png",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    # Exactly one upload, and it is the newest image (old.png is NOT re-uploaded).
+    assert len(uploads) == 1
+    assert uploads[0].endswith("/original/new.png")
+    assert uploads[0].startswith("chat-abc/")
+
+
+def test_chat_text_only_follow_up_uploads_nothing(client, monkeypatch):
+    # A text-only latest message must not trigger any upload, even if an earlier
+    # message had an image.
+    uploads = []
+    monkeypatch.setattr(
+        app_module, "upload_image", lambda key, data, content_type="image/jpeg": uploads.append(key)
+    )
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: _fake_agent_result())
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "here is an image",
+                    "image_base64": image_b64,
+                    "image_filename": "pic.png",
+                },
+                {"role": "assistant", "content": "Got it."},
+                {"role": "user", "content": "tell me more"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert uploads == []
+
+
 def test_chat_context_limit_exceeded(client, monkeypatch):
     result = _fake_agent_result()
     result["context_limit_exceeded"] = True
@@ -97,7 +272,10 @@ def test_chat_context_limit_exceeded(client, monkeypatch):
 
     response = client.post(
         "/chat",
-        json={"messages": [{"role": "user", "content": "Loop forever"}]},
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "Loop forever"}],
+        },
     )
 
     assert response.status_code == 200
@@ -136,3 +314,21 @@ def test_rate_limiter_delays_when_bucket_exhausted():
     # Allow generous tolerance so the test is not flaky on slow/busy machines:
     # it must clearly wait (not instant) but stay in a reasonable upper bound.
     assert 0.8 <= elapsed <= 2.0
+
+
+def test_safe_image_name_preserves_filename_and_extension():
+    assert safe_image_name("photo.png") == "photo.png"
+    assert safe_image_name("beatles.JPEG") == "beatles.JPEG"
+    # Directory components are stripped so the name stays a single key segment.
+    assert safe_image_name("../../etc/passwd") == "passwd"
+    assert safe_image_name("/abs/path/cat.jpg") == "cat.jpg"
+
+
+def test_safe_image_name_falls_back_when_missing():
+    # No usable filename -> generated name, never the hard-coded "image.jpg".
+    for value in [None, "", "   ", ".", ".."]:
+        name = safe_image_name(value)
+        assert name
+        assert name != "image.jpg"
+        assert "/" not in name
+

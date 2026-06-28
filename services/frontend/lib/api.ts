@@ -9,12 +9,13 @@ export interface SendMessageResult {
 }
 
 export async function sendMessage(
+  chatId: string,
   messages: ChatMessage[]
 ): Promise<SendMessageResult> {
   const res = await fetch(`${AGENT_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ chat_id: chatId, messages }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
