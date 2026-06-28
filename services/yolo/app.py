@@ -77,7 +77,7 @@ class PredictionResponse(BaseModel):
 
 # Download the AI model (tiny model ~6MB)
 model = YOLO("yolov8n.pt")
-@app.post("/predict", response_model=PredictionResponse)
+
 
 @app.post("/predict")
 def predict(request: PredictRequest, db: Session = Depends(get_db)):
