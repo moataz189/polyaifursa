@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
@@ -10,10 +10,9 @@ WORKDIR /app
 
 COPY torch-requirements.txt .
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r torch-requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-
+RUN pip install --no-cache-dir --upgrade "wheel==0.46.2" "pip>=26.1.2"
 COPY . .
 
 EXPOSE 8080
