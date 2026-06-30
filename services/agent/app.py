@@ -198,6 +198,12 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         # the invalid name is echoed back on the next request and rejected.
         for tool_call in response.tool_calls:
             tool_call["name"] = tool_call["name"].split("<|")[0]
+            # Bedrock Converse requires toolUse.input to be a JSON object. Our
+            # tools take no arguments, so the model may emit None/"" for args;
+            # coerce anything that is not a dict to {} so the echoed-back
+            # AIMessage stays valid on the next request.
+            if not isinstance(tool_call.get("args"), dict):
+                tool_call["args"] = {}
 
         messages.append(response)
 
