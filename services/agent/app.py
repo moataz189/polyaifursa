@@ -59,8 +59,10 @@ SYSTEM_PROMPT = (
     "- The frontend will display the image automatically.\n"
     "- Mention that the annotated image is attached, but never print the URL.\n"
     "annotated image (the image with bounding boxes). It returns the picture with boxes drawn on it.\n"
-    "- show_annotated_image needs a prior detection, so if none has run yet in this turn, "
-    "call detect_objects first and then show_annotated_image.\n"
+    "- show_annotated_image requires a prior detection. If the conversation shows that a detection "
+    "already exists, call show_annotated_image directly and do NOT re-run detect_objects. "
+    "Only call detect_objects first when no prior detection exists yet (e.g. a newly uploaded image "
+    "that has not been analyzed).\n"
     "When the user asks to analyze, detect, identify, or describe the image, call only detect_objects.\n"
     "Do not call show_annotated_image unless the user explicitly asks to see the annotated image, bounding boxes, marked image, or image with boxes."
 )
@@ -196,6 +198,12 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         # the invalid name is echoed back on the next request and rejected.
         for tool_call in response.tool_calls:
             tool_call["name"] = tool_call["name"].split("<|")[0]
+            # Bedrock Converse requires toolUse.input to be a JSON object. Our
+            # tools take no arguments, so the model may emit None/"" for args;
+            # coerce anything that is not a dict to {} so the echoed-back
+            # AIMessage stays valid on the next request.
+            if not isinstance(tool_call.get("args"), dict):
+                tool_call["args"] = {}
 
         messages.append(response)
 
@@ -355,6 +363,21 @@ def chat(request: ChatRequest):
             chat_id, prediction_id, "original", image_name
         )
         upload_image(latest_image_s3_key, image_bytes)
+
+    # When a detection from an earlier request already exists and the user did
+    # NOT upload a new image, give the model an explicit, in-context signal so
+    # its tool choice is deterministic: it must reuse the existing detection via
+    # show_annotated_image instead of redundantly re-running detect_objects.
+    if request.latest_prediction_id and latest_image_s3_key is None:
+        lc_messages.append(
+            SystemMessage(
+                content=(
+                    "A previous object detection already exists for this conversation. "
+                    "If the user asks to see the annotated image, call show_annotated_image "
+                    "directly. Do NOT call detect_objects again; no new image was uploaded."
+                )
+            )
+        )
 
     token_image = _current_image_s3_key.set(latest_image_s3_key)
     token_prediction = _latest_prediction_uid.set(request.latest_prediction_id)
