@@ -26,13 +26,12 @@ jobs:
         run: pytest tests/
         working-directory: services/yolo
       
-      
-   
-      
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: services/yolo/coverage.xml
+          flags: yolo
 
   agent-test:
     runs-on: ubuntu-latest
@@ -54,7 +53,14 @@ jobs:
           MODEL: openai.gpt-oss-20b-1:0
           MODEL_PROVIDER: bedrock_converse
           AWS_REGION: us-east-1
-        run: pytest tests/
+        run: pytest tests/ --cov=app --cov-report=xml
+      
+      - name: Upload agent coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: services/agent/coverage.xml
+          flags: agent
 
   docker-scout:
     runs-on: ubuntu-latest

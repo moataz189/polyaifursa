@@ -12,7 +12,7 @@ COPY torch-requirements.txt .
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r torch-requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir --upgrade "wheel==0.46.2" "pip>=26.1.2"
+RUN pip install --no-cache-dir --upgrade "wheel==0.46.2" "pip>=26.1.2" "setuptools>=78.1.1"
 COPY . .
 
 EXPOSE 8080
