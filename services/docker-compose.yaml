@@ -16,7 +16,6 @@ services:
       - "8000:8000"
     environment:
       YOLO_SERVICE_URL: http://yolo:8080
-      YOLO_PUBLIC_URL: http://localhost:8080
       AWS_REGION: us-east-1
       MODEL_PROVIDER: bedrock_converse
       MODEL: openai.gpt-oss-20b-1:0
