@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, Response
+from polars import datetime
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -12,6 +13,16 @@ import shutil
 import time
 import signal
 import sys
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+load_dotenv()
+
+from s3 import (
+    download_image,
+    upload_image,
+    derive_predicted_key,
+    parse_prediction_id,
+)
 
 from db import get_db, init_db
 from models import PredictionSession, DetectionObject
@@ -54,72 +65,81 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PREDICTED_DIR, exist_ok=True)
 
 
+class PredictRequest(BaseModel):
+    image_s3_key: str
+
+
 class PredictionResponse(BaseModel):
     prediction_uid: str
     detection_count: int
     labels: list[str]
     time_took: float
+    predicted_image_s3_key: str
 
 
 # Download the AI model (tiny model ~6MB)
 model = YOLO("yolov8n.pt")
-@app.post("/predict", response_model=PredictionResponse)
-def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """
-    Predict objects in an image
-    """
+@app.post("/predict")
+def predict(request: PredictRequest, db: Session = Depends(get_db)):
     start_time = time.time()
-    ext = os.path.splitext(file.filename)[1].lower()
+    image_s3_key = request.image_s3_key
+
+    ext = os.path.splitext(image_s3_key)[1].lower()
     if ext not in [".jpg", ".jpeg", ".png"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Only image files are supported"
-        )
-    uid = str(uuid.uuid4())
+        raise HTTPException(status_code=400, detail="Only image files are supported")
+
+    uid = parse_prediction_id(image_s3_key)
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
 
+    image_bytes = download_image(image_s3_key)
     with open(original_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        f.write(image_bytes)
 
     results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
 
-    annotated_frame = results[0].plot()  # NumPy image with boxes
+    annotated_frame = results[0].plot()
     annotated_image = Image.fromarray(annotated_frame)
     annotated_image.save(predicted_path)
 
-    # Create prediction session
-    session_obj = PredictionSession(
+    predicted_s3_key = derive_predicted_key(image_s3_key)
+    with open(predicted_path, "rb") as f:
+        upload_image(predicted_s3_key, f.read())
+
+    session = PredictionSession(
         uid=uid,
-        original_image=original_path,
-        predicted_image=predicted_path
+        timestamp=datetime.now(timezone.utc),
+        original_image=image_s3_key,
+        predicted_image=predicted_s3_key,
     )
-    db.add(session_obj)
-    db.flush()  # Satisfy FK before adding detection objects
-    
+    db.add(session)
+
     detected_labels = []
     for box in results[0].boxes:
         label_idx = int(box.cls[0].item())
         label = model.names[label_idx]
         score = float(box.conf[0])
         bbox = box.xyxy[0].tolist()
+
         detection = DetectionObject(
             prediction_uid=uid,
             label=label,
             score=score,
-            box=str(bbox)
+            box=str(bbox),
         )
         db.add(detection)
         detected_labels.append(label)
-    
+
     db.commit()
+
     processing_time = round(time.time() - start_time, 2)
 
     return {
-        "prediction_uid": uid, 
+        "prediction_uid": uid,
         "detection_count": len(results[0].boxes),
         "labels": detected_labels,
-        "time_took": processing_time
+        "time_took": processing_time,
+        "predicted_image_s3_key": predicted_s3_key,
     }
 
 @app.get("/prediction/{uid}")
@@ -150,12 +170,16 @@ def get_prediction_by_uid(uid: str, db: Session = Depends(get_db)):
 @app.get("/prediction/{uid}/image")
 def get_prediction_image(uid: str, db: Session = Depends(get_db)):
     """
-    Return the annotated (bounding-box) image for a prediction
+    Return the annotated image for a prediction, downloaded from S3 using
+    the stored predicted-image object key.
     """
     session = db.get(PredictionSession, uid)
-    if not session or not os.path.exists(session.predicted_image):
+    if not session or not session.predicted_image:
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(session.predicted_image)
+
+    image_bytes = download_image(session.predicted_image)
+    return Response(content=image_bytes, media_type="image/jpeg")
+
 
 
 @app.get("/health")
