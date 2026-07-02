@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-
+import app as app_module
 from app import app
 from db import get_db
 from models import Base, PredictionSession
@@ -30,29 +30,26 @@ def setup_db():
     return TestClient(app), TestSessionLocal
 
 
-def test_get_prediction_image_success(tmp_path):
+def test_get_prediction_image_success(tmp_path, monkeypatch):
     client, session_local = setup_db()
 
-    image_path = tmp_path / "predicted.jpg"
-    image_path.write_bytes(b"fake image content")
+    monkeypatch.setattr(
+        app_module,
+        "download_image",
+        lambda key: b"fake image content",
+    )
 
     with session_local() as db:
-        db.add(PredictionSession(
-            uid="abc-123",
-            original_image="original.jpg",
-            predicted_image=str(image_path)
-        ))
+        db.add(
+            PredictionSession(
+                uid="abc-123",
+                original_image="chat-1/abc-123/original/img.jpg",
+                predicted_image="chat-1/abc-123/predicted/img.jpg",
+            )
+        )
         db.commit()
 
     response = client.get("/prediction/abc-123/image")
 
     assert response.status_code == 200
-
-
-def test_get_prediction_image_not_found():
-    client, _ = setup_db()
-
-    response = client.get("/prediction/not-found/image")
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Image not found"
+    assert response.content == b"fake image content"

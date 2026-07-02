@@ -1,9 +1,9 @@
 import base64
-import io
 import json
 import logging
 import os
 import time
+import uuid
 from contextvars import ContextVar
 from typing import Optional
 
@@ -26,6 +26,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import tool
 from pydantic import BaseModel
+
+from s3 import build_object_key, safe_image_name, upload_image
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
 YOLO_PUBLIC_URL = os.getenv("YOLO_PUBLIC_URL", YOLO_SERVICE_URL)
@@ -57,11 +59,15 @@ SYSTEM_PROMPT = (
     "- The frontend will display the image automatically.\n"
     "- Mention that the annotated image is attached, but never print the URL.\n"
     "annotated image (the image with bounding boxes). It returns the picture with boxes drawn on it.\n"
-    "- show_annotated_image needs a prior detection, so if none has run yet in this turn, "
-    "call detect_objects first and then show_annotated_image."
+    "- show_annotated_image requires a prior detection. If the conversation shows that a detection "
+    "already exists, call show_annotated_image directly and do NOT re-run detect_objects. "
+    "Only call detect_objects first when no prior detection exists yet (e.g. a newly uploaded image "
+    "that has not been analyzed).\n"
+    "When the user asks to analyze, detect, identify, or describe the image, call only detect_objects.\n"
+    "Do not call show_annotated_image unless the user explicitly asks to see the annotated image, bounding boxes, marked image, or image with boxes."
 )
 
-_current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
+_current_image_s3_key: ContextVar[Optional[str]] = ContextVar("current_image_s3_key", default=None)
 _latest_prediction_uid: ContextVar[Optional[str]] = ContextVar("latest_prediction_uid", default=None)
 
 
@@ -69,17 +75,15 @@ _latest_prediction_uid: ContextVar[Optional[str]] = ContextVar("latest_predictio
 @tool
 def detect_objects() -> str:
     """Detect and identify objects in the image provided by the user using YOLO object detection."""
-    image_b64 = _current_image_b64.get()
+    image_s3_key = _current_image_s3_key.get()
 
-    if not image_b64:
+    if not image_s3_key:
         return json.dumps({"error": "No image was provided by the user."})
-
-    image_bytes = base64.b64decode(image_b64)
 
     with httpx.Client(timeout=30.0) as client:
         response = client.post(
             f"{YOLO_SERVICE_URL}/predict",
-            files={"file": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
+            json={"image_s3_key": image_s3_key},
         )
         response.raise_for_status()
 
@@ -168,7 +172,12 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
     image_url = None
     annotated_image = None
-    prediction_uid = None
+    # Seed from the context var, which holds request.latest_prediction_id (set
+    # in chat() before this runs). This lets a follow-up "show annotated image"
+    # request fetch the image for a detection that ran in an EARLIER request,
+    # where detect_objects does not run again. It also makes the returned
+    # prediction_id round-trip so the client keeps a valid id.
+    prediction_uid = _latest_prediction_uid.get()
     tools_called: list[str] = []
     iterations = 0
     context_limit_exceeded = False
@@ -181,6 +190,21 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         iterations += 1
 
         response: AIMessage = llm_with_tools.invoke(messages)
+
+        # Some providers (e.g. Bedrock via gpt-oss) suffix the tool name with
+        # control tokens like "show_annotated_image<|channel|>commentary".
+        # Bedrock requires toolUse.name to match [a-zA-Z0-9_-]+, so sanitize the
+        # names ON THE RESPONSE before it is appended to the history; otherwise
+        # the invalid name is echoed back on the next request and rejected.
+        for tool_call in response.tool_calls:
+            tool_call["name"] = tool_call["name"].split("<|")[0]
+            # Bedrock Converse requires toolUse.input to be a JSON object. Our
+            # tools take no arguments, so the model may emit None/"" for args;
+            # coerce anything that is not a dict to {} so the echoed-back
+            # AIMessage stays valid on the next request.
+            if not isinstance(tool_call.get("args"), dict):
+                tool_call["args"] = {}
+
         messages.append(response)
 
         # Accumulate token usage across every LLM call in the loop.
@@ -199,13 +223,26 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
             break
 
         # Execute every tool the model requested
+        
         for tool_call in response.tool_calls:
-            tool_fn = TOOLS[tool_call["name"]]
-            tool_result = tool_fn.invoke(tool_call)
-            messages.append(tool_result)
-            tools_called.append(tool_call["name"])
+            tool_name = tool_call["name"]
 
-            if tool_call["name"] == "detect_objects":
+            if tool_name not in TOOLS:
+                messages.append(
+                    ToolMessage(
+                        content=json.dumps({"error": f"Unknown tool: {tool_name}"}),
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+                continue
+
+            tool_fn = TOOLS[tool_name]
+            tool_result = tool_fn.invoke(tool_call)
+
+            messages.append(tool_result)
+            tools_called.append(tool_name)
+
+            if tool_name == "detect_objects":
                 # Store the UID in THIS context so a later show_annotated_image
                 # call (which runs in a child context) can read it.
                 tool_data = json.loads(tool_result.content)
@@ -215,7 +252,7 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                     _latest_prediction_uid.set(uid)
 
 
-            if tool_call["name"] == "show_annotated_image":
+            if tool_name == "show_annotated_image":
                 tool_data = json.loads(tool_result.content)
                 image_url = tool_data.get("image_url") or image_url
                 # Fetch the annotated image bytes from YOLO and base64-encode
@@ -261,10 +298,13 @@ class ChatMessage(BaseModel):
     role: str                           # "user" or "assistant"
     content: str
     image_base64: Optional[str] = None  # only on user messages that carry an image
+    image_filename: Optional[str] = None  # original uploaded filename (e.g. "photo.png")
 
 
 class ChatRequest(BaseModel):
+    chat_id: str                        # stable id generated once by the client
     messages: list[ChatMessage]         # full conversation thread, oldest first
+    latest_prediction_id: Optional[str] = None  # prediction_id from a prior response, if any
 
 
 class TokensUsed(BaseModel):
@@ -288,13 +328,14 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    lc_messages = []
-    latest_image = None
+    chat_id = request.chat_id
 
+    # Build the text-only conversation history for the LLM. Image bytes are
+    # never sent to the model; we only mark that an image was attached.
+    lc_messages = []
     for msg in request.messages:
         if msg.role == "user":
             if msg.image_base64:
-                latest_image = msg.image_base64          # saved for detect_objects tool
                 content = msg.content + "\n[An image was uploaded. Use existing tools to analyze it according to user instructions.]"
             else:
                 content = msg.content
@@ -302,8 +343,44 @@ def chat(request: ChatRequest):
         else:
             lc_messages.append(AIMessage(content=msg.content))
 
-    token_image = _current_image_b64.set(latest_image)
-    token_prediction = _latest_prediction_uid.set(None)
+    # Upload ONLY the newest image: the one attached to the most recent user
+    # message. Older images were already uploaded on previous requests, so we
+    # never re-upload them here.
+    latest_image_s3_key = None
+    latest_user_msg = next(
+        (m for m in reversed(request.messages) if m.role == "user"), None
+    )
+    if latest_user_msg and latest_user_msg.image_base64:
+        # Each new image gets its own prediction_id under the stable chat_id.
+        prediction_id = str(uuid.uuid4())
+        image_bytes = base64.b64decode(latest_user_msg.image_base64)
+        # Preserve the real uploaded filename in the key; if the client did not
+        # send one, fall back to "<prediction_id>.jpg".
+        image_name = safe_image_name(
+            latest_user_msg.image_filename, fallback=f"{prediction_id}.jpg"
+        )
+        latest_image_s3_key = build_object_key(
+            chat_id, prediction_id, "original", image_name
+        )
+        upload_image(latest_image_s3_key, image_bytes)
+
+    # When a detection from an earlier request already exists and the user did
+    # NOT upload a new image, give the model an explicit, in-context signal so
+    # its tool choice is deterministic: it must reuse the existing detection via
+    # show_annotated_image instead of redundantly re-running detect_objects.
+    if request.latest_prediction_id and latest_image_s3_key is None:
+        lc_messages.append(
+            SystemMessage(
+                content=(
+                    "A previous object detection already exists for this conversation. "
+                    "If the user asks to see the annotated image, call show_annotated_image "
+                    "directly. Do NOT call detect_objects again; no new image was uploaded."
+                )
+            )
+        )
+
+    token_image = _current_image_s3_key.set(latest_image_s3_key)
+    token_prediction = _latest_prediction_uid.set(request.latest_prediction_id)
     
 
     try:
@@ -320,7 +397,7 @@ def chat(request: ChatRequest):
             image_url=result["image_url"],
         )
     finally:
-        _current_image_b64.reset(token_image)
+        _current_image_s3_key.reset(token_image)
         _latest_prediction_uid.reset(token_prediction)
         
 
