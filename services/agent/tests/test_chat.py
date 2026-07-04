@@ -25,7 +25,11 @@ def _fake_agent_result():
         "response": "I found a person and a guitar.",
         "image_url": "http://yolo.example/prediction/abc-123/image",
         "annotated_image": "aGVsbG8=",
+        "processed_image": None,
         "prediction_id": "abc-123",
+        "latest_image_s3_key": None,
+        "latest_image_id": None,
+        "original_image_s3_key": None,
         "iterations": 2,
         "tools_called": ["detect_objects", "show_annotated_image"],
         "context_limit_exceeded": False,
@@ -70,6 +74,26 @@ def test_chat_response_schema(client, monkeypatch):
     assert data["context_limit_exceeded"] is False
     # Backward-compatible field is preserved.
     assert data["image_url"] == "http://yolo.example/prediction/abc-123/image"
+    # New processed-image field is present (null when no processing tool ran).
+    assert "processed_image" in data
+    assert data["processed_image"] is None
+
+
+def test_chat_returns_processed_image(client, monkeypatch):
+    result = _fake_agent_result()
+    result["processed_image"] = "cHJvY2Vzc2Vk"
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: result)
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "rotate the image 90 degrees"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["processed_image"] == "cHJvY2Vzc2Vk"
 
 
 def test_chat_tokens_used(client, monkeypatch):
@@ -262,6 +286,330 @@ def test_chat_text_only_follow_up_uploads_nothing(client, monkeypatch):
 
     assert response.status_code == 200
     assert uploads == []
+
+
+def test_chat_returns_new_image_key(client, monkeypatch):
+    # When a new image is uploaded, its S3 key is echoed back in
+    # latest_image_s3_key so the client can reuse it on follow-up requests.
+    captured = {}
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        captured["key"] = key
+        return key
+
+    def fake_run_agent(*args, **kwargs):
+        # The real run_agent seeds latest_image_s3_key from the context var.
+        result = _fake_agent_result()
+        result["latest_image_s3_key"] = app_module._current_image_s3_key.get()
+        return result
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "here is an image",
+                    "image_base64": image_b64,
+                    "image_filename": "pic.png",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["latest_image_s3_key"] == captured["key"]
+
+
+def test_chat_reuses_previous_image_key(client, monkeypatch):
+    # A follow-up request without a new image reuses the client-supplied
+    # latest_image_s3_key, sets it as the current image, and echoes it back.
+    seen_key = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen_key["value"] = app_module._current_image_s3_key.get()
+        result = _fake_agent_result()
+        result["latest_image_s3_key"] = app_module._current_image_s3_key.get()
+        return result
+
+    # No new image means no upload should ever happen.
+    monkeypatch.setattr(
+        app_module,
+        "upload_image",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    prior_key = "chat-abc/pred-1/original/pic.png"
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "rotate the previous image 90 degrees"}],
+            "latest_image_s3_key": prior_key,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # The tools saw the carried-over key, and it is echoed back to the client.
+    assert seen_key["value"] == prior_key
+    assert data["latest_image_s3_key"] == prior_key
+
+
+def test_chat_new_image_takes_precedence_over_previous_key(client, monkeypatch):
+    # If both a new upload and a previous key are present, the new upload wins.
+    captured = {}
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        captured["key"] = key
+        return key
+
+    seen_key = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen_key["value"] = app_module._current_image_s3_key.get()
+        result = _fake_agent_result()
+        result["latest_image_s3_key"] = app_module._current_image_s3_key.get()
+        return result
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "here is a new image",
+                    "image_base64": image_b64,
+                    "image_filename": "new.png",
+                }
+            ],
+            "latest_image_s3_key": "chat-abc/old/original/old.png",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert seen_key["value"] == captured["key"]
+    assert data["latest_image_s3_key"] == captured["key"]
+    assert data["latest_image_s3_key"] != "chat-abc/old/original/old.png"
+
+
+def test_chat_no_image_and_no_previous_key(client, monkeypatch):
+    # Pure text conversation with no image anywhere: latest_image_s3_key is null.
+    monkeypatch.setattr(app_module, "run_agent", lambda *args, **kwargs: _fake_agent_result())
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["latest_image_s3_key"] is None
+
+
+def test_chat_new_image_resets_previous_prediction_id(client, monkeypatch):
+    # Uploading a new image must drop any carried-over prediction id (it belongs
+    # to an OLDER image). The agent should be seeded with prediction_id = None.
+    seen = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen["prediction"] = app_module._latest_prediction_uid.get()
+        seen["image_key"] = app_module._current_image_s3_key.get()
+        return _fake_agent_result()
+
+    monkeypatch.setattr(
+        app_module, "upload_image", lambda key, data, content_type="image/jpeg": key
+    )
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "here is a new image",
+                    "image_base64": image_b64,
+                    "image_filename": "new.png",
+                }
+            ],
+            # Stale state from an older image that must be discarded.
+            "latest_prediction_id": "old-pred",
+            "latest_image_s3_key": "chat-abc/old/original/old.png",
+        },
+    )
+
+    assert response.status_code == 200
+    # The old prediction was dropped; the tools see no detection for the new image.
+    assert seen["prediction"] is None
+    # The new upload is the image in play, not the old key.
+    assert seen["image_key"].endswith("/original/new.png")
+
+
+def test_chat_new_image_creates_image_id_and_original_key(client, monkeypatch):
+    # Uploading a new image must generate an image_id, store the original under
+    # <chat_id>/<image_id>/original/<filename>, seed the tools with that key and
+    # image_id, and reset any prior prediction.
+    seen = {}
+
+    def fake_upload(key, data, content_type="image/jpeg"):
+        seen["key"] = key
+        return key
+
+    def fake_run_agent(*args, **kwargs):
+        seen["image_id"] = app_module._current_image_id.get()
+        seen["image_key"] = app_module._current_image_s3_key.get()
+        seen["original_key"] = app_module._original_image_s3_key.get()
+        result = _fake_agent_result()
+        # The real run_agent echoes the current image_id back.
+        result["latest_image_id"] = app_module._current_image_id.get()
+        result["latest_image_s3_key"] = app_module._current_image_s3_key.get()
+        return result
+
+    monkeypatch.setattr(app_module, "upload_image", fake_upload)
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-xyz",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "here is an image",
+                    "image_base64": image_b64,
+                    "image_filename": "cat.png",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # The original image key follows <chat_id>/<image_id>/original/<filename>.
+    parts = seen["key"].split("/")
+    assert parts[0] == "chat-xyz"
+    assert parts[2] == "original"
+    assert parts[3] == "cat.png"
+    image_id = parts[1]
+
+    # The context is seeded with the same image_id and original key.
+    assert seen["image_id"] == image_id
+    assert seen["image_key"] == seen["key"]
+    assert seen["original_key"] == seen["key"]
+
+    # The image_id round-trips to the client and is distinct from a prediction.
+    assert data["latest_image_id"] == image_id
+    assert data["latest_image_s3_key"] == seen["key"]
+
+
+def test_chat_reuses_previous_image_id(client, monkeypatch):
+    # A follow-up request without a new image carries over latest_image_id and
+    # seeds the tools with it (same image flow), echoing it back.
+    seen = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen["image_id"] = app_module._current_image_id.get()
+        result = _fake_agent_result()
+        result["latest_image_id"] = app_module._current_image_id.get()
+        return result
+
+    monkeypatch.setattr(
+        app_module,
+        "upload_image",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "rotate the previous image"}],
+            "latest_image_s3_key": "chat-abc/img-7/original/pic.png",
+            "latest_image_id": "img-7",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert seen["image_id"] == "img-7"
+    assert data["latest_image_id"] == "img-7"
+
+
+def test_chat_seeds_original_key_from_request_not_latest(client, monkeypatch):
+    # A follow-up request after processing: latest_image_s3_key points at the
+    # processed image, but original_image_s3_key must be seeded from the
+    # client-supplied original key, NOT derived from latest_image_s3_key.
+    seen = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen["original"] = app_module._original_image_s3_key.get()
+        seen["latest"] = app_module._current_image_s3_key.get()
+        result = _fake_agent_result()
+        result["original_image_s3_key"] = app_module._original_image_s3_key.get()
+        result["latest_image_s3_key"] = app_module._current_image_s3_key.get()
+        return result
+
+    monkeypatch.setattr(
+        app_module,
+        "upload_image",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not upload")),
+    )
+    monkeypatch.setattr(app_module, "run_agent", fake_run_agent)
+
+    processed_key = "chat-abc/img-7/processed/add_noise_pic.png"
+    original_key = "chat-abc/img-7/original/pic.png"
+
+    response = client.post(
+        "/chat",
+        json={
+            "chat_id": "chat-abc",
+            "messages": [{"role": "user", "content": "detect the original image"}],
+            "latest_image_s3_key": processed_key,
+            "latest_image_id": "img-7",
+            "original_image_s3_key": original_key,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # The original key comes from the request, not the processed latest key.
+    assert seen["original"] == original_key
+    assert seen["latest"] == processed_key
+    assert data["original_image_s3_key"] == original_key
 
 
 def test_chat_context_limit_exceeded(client, monkeypatch):

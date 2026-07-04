@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import logging
 import os
@@ -25,9 +26,11 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import tool
+from PIL import Image
 from pydantic import BaseModel
 
-from s3 import build_object_key, safe_image_name, upload_image
+from mcp_client import call_mcp_tool
+from s3 import build_object_key, download_image, safe_image_name, upload_image
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
 YOLO_PUBLIC_URL = os.getenv("YOLO_PUBLIC_URL", YOLO_SERVICE_URL)
@@ -64,18 +67,79 @@ SYSTEM_PROMPT = (
     "Only call detect_objects first when no prior detection exists yet (e.g. a newly uploaded image "
     "that has not been analyzed).\n"
     "When the user asks to analyze, detect, identify, or describe the image, call only detect_objects.\n"
-    "Do not call show_annotated_image unless the user explicitly asks to see the annotated image, bounding boxes, marked image, or image with boxes."
+    "Do not call show_annotated_image unless the user explicitly asks to see the annotated image, bounding boxes, marked image, or image with boxes.\n"
+    "\n"
+    "TOOL-SELECTION RULES:\n"
+    "1. When the user specifies BOTH a source image and an operation, execute it directly. "
+    "Do NOT ask for confirmation unless the request is genuinely ambiguous. For example, "
+    "'rotate 90 the original image' means call rotate on the original image right away.\n"
+    "2. Choosing which image an operation applies to:\n"
+    "   - If the user says 'original image', use the ORIGINAL uploaded image "
+    "(source='original' for detect_objects AND for image-processing tools like "
+    "rotate/flip/blur/resize/crop/add_noise).\n"
+    "   - If the user says 'current', 'latest', or 'processed image', use the latest/processed "
+    "image (source='current' or source='processed').\n"
+    "   - If the user does not specify a source, use the current/latest image "
+    "(source='current').\n"
+    "3. Combined detect + annotated requests: if the user asks to detect/analyze/identify objects "
+    "AND to show/display/attach the annotated image in the SAME request, you MUST make TWO tool "
+    "calls in order: first call detect_objects with the correct source, then call "
+    "show_annotated_image. Do NOT stop after detect_objects only.\n"
+    "\n"
+    "EXAMPLES:\n"
+    "- 'Detect objects in the original image and show the annotated image' -> call "
+    "detect_objects(source='original'), then show_annotated_image.\n"
+    "- 'Detect objects in the current image and show annotated image' -> call "
+    "detect_objects(source='current'), then show_annotated_image.\n"
+    "- 'Can you rotate 90 the original image?' -> rotate the original image by 90 degrees "
+    "directly; do not ask for confirmation.\n"
+    "- 'Add noise to the original image' -> add_noise(source='original', amount=...).\n"
+    "- 'Rotate the current image' -> rotate(source='current', angle=...)."
 )
 
 _current_image_s3_key: ContextVar[Optional[str]] = ContextVar("current_image_s3_key", default=None)
+_current_image_id: ContextVar[Optional[str]] = ContextVar("current_image_id", default=None)
+# The original uploaded image key (chat_id/image_id/original/<filename>) for the
+# current image flow. Stays fixed while image-processing tools produce new keys.
+_original_image_s3_key: ContextVar[Optional[str]] = ContextVar("original_image_s3_key", default=None)
+# The most recent processed image key (None until an image-processing tool runs).
+_latest_processed_key: ContextVar[Optional[str]] = ContextVar("latest_processed_key", default=None)
 _latest_prediction_uid: ContextVar[Optional[str]] = ContextVar("latest_prediction_uid", default=None)
 
 
+def _resolve_detect_source(source: Optional[str]) -> Optional[str]:
+    """Resolve which image key a detection should run on.
+
+    - "original":  the originally uploaded image (chat_id/image_id/original/...).
+    - "processed": the most recent processed image, if any.
+    - "current"/default/anything else: the latest usable image key.
+
+    Falls back to the current/latest image key when the requested source is not
+    available (e.g. "processed" before any processing has happened).
+    """
+    choice = (source or "current").strip().lower()
+    current = _current_image_s3_key.get()
+    if choice == "original":
+        return _original_image_s3_key.get() or current
+    if choice == "processed":
+        return _latest_processed_key.get() or current
+    return current
+
 
 @tool
-def detect_objects() -> str:
-    """Detect and identify objects in the image provided by the user using YOLO object detection."""
-    image_s3_key = _current_image_s3_key.get()
+def detect_objects(source: str = "current") -> str:
+    """Detect and identify objects in an image using YOLO object detection.
+
+    `source` selects which image to analyze:
+    - "current" (default): the latest image in play (the most recent
+      uploaded OR processed image). Use this when the user just says
+      "detect the image" or does not specify.
+    - "original": the image the user originally uploaded, ignoring any
+      processing. Use for "detect the original image".
+    - "processed": the most recent processed image (e.g. after rotate/blur/
+      flip/resize/crop/noise). Use for "detect the rotated/blurred/processed image".
+    """
+    image_s3_key = _resolve_detect_source(source)
 
     if not image_s3_key:
         return json.dumps({"error": "No image was provided by the user."})
@@ -88,6 +152,9 @@ def detect_objects() -> str:
         response.raise_for_status()
 
     data = response.json()
+    # Echo back which key was detected so the caller can track that the
+    # prediction belongs to this image key.
+    data["detected_image_s3_key"] = image_s3_key
     return json.dumps(data)
 
 
@@ -109,10 +176,101 @@ def show_annotated_image() -> str:
     return json.dumps({"image_url": image_url})
 
 
+def _run_img_proc_tool(mcp_tool_name: str, extra_args: dict, source: str = "current") -> str:
+    """Call an image-processing MCP tool on one of the user's images.
+
+    `source` selects which image to process, exactly like detect_objects:
+    "current" (default), "original", or "processed". The input S3 key is
+    resolved from the request context so the LLM never handles raw S3 keys.
+    Returns a JSON string with the processed image's S3 key (or an error).
+    """
+    input_key = _resolve_detect_source(source)
+    if not input_key:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    try:
+        output_key = call_mcp_tool(
+            mcp_tool_name, {"input_key": input_key, **extra_args}
+        )
+    except Exception as exc:  # subprocess / transport / validation boundary
+        return json.dumps({"error": str(exc)})
+
+    return json.dumps({"output_key": output_key})
+
+
+@tool
+def rotate(angle: float, source: str = "current") -> str:
+    """Rotate an image counter-clockwise by `angle` degrees.
+
+    `source` picks which image: "current" (default, latest/processed image),
+    "original" (the originally uploaded image), or "processed" (the most recent
+    processed image)."""
+    return _run_img_proc_tool("rotate", {"angle": angle}, source=source)
+
+
+@tool
+def flip(direction: str = "horizontal", source: str = "current") -> str:
+    """Flip an image "horizontal" (left-right) or "vertical" (top-bottom).
+
+    `source` picks which image: "current" (default), "original", or "processed"."""
+    return _run_img_proc_tool("flip", {"direction": direction}, source=source)
+
+
+@tool
+def blur(radius: float = 2.0, source: str = "current") -> str:
+    """Apply a Gaussian blur to an image using the given `radius`.
+
+    `source` picks which image: "current" (default), "original", or "processed"."""
+    return _run_img_proc_tool("blur", {"radius": radius}, source=source)
+
+
+@tool
+def resize(width: int, height: int, source: str = "current") -> str:
+    """Resize an image to `width` x `height` pixels.
+
+    `source` picks which image: "current" (default), "original", or "processed"."""
+    return _run_img_proc_tool("resize", {"width": width, "height": height}, source=source)
+
+
+@tool
+def crop(left: int, top: int, right: int, bottom: int, source: str = "current") -> str:
+    """Crop an image to the box (left, top, right, bottom).
+
+    `source` picks which image: "current" (default), "original", or "processed"."""
+    return _run_img_proc_tool(
+        "crop", {"left": left, "top": top, "right": right, "bottom": bottom}, source=source
+    )
+
+
+@tool
+def add_noise(amount: float = 0.02, source: str = "current") -> str:
+    """Add random noise to an image. `amount` is between 0 and 1.
+
+    `source` picks which image: "current" (default), "original", or "processed"."""
+    return _run_img_proc_tool("add_noise", {"amount": amount}, source=source)
+
+
 # Registry: map tool name -> tool function
 TOOLS = {
     detect_objects.name: detect_objects,
     show_annotated_image.name: show_annotated_image,
+    rotate.name: rotate,
+    flip.name: flip,
+    blur.name: blur,
+    resize.name: resize,
+    crop.name: crop,
+    add_noise.name: add_noise,
+}
+
+# Tools that produce a processed image in S3 (returning an "output_key"). Their
+# result is downloaded and returned to the client as base64 (processed_image).
+IMG_PROC_TOOL_NAMES = {
+    rotate.name,
+    flip.name,
+    blur.name,
+    resize.name,
+    crop.name,
+    add_noise.name,
 }
 
 # Throttle outbound LLM requests. Realistic values for a single-user dev
@@ -136,6 +294,52 @@ llm = init_chat_model(
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 
 
+def _encode_image_b64(data: bytes) -> str:
+    """Encode raw image bytes as an ASCII base64 string."""
+    return base64.b64encode(data).decode("ascii")
+
+
+# Longest-side pixel limit for images returned to the frontend. Large images
+# (15MB+ raw) can choke Chrome DevTools and the chat UI, so we downscale a
+# DISPLAY copy only. The original stored in S3 is never modified.
+DISPLAY_MAX_SIDE = 1200
+
+
+def _resize_for_display(data: bytes) -> bytes:
+    """Return display-friendly image bytes, downscaled if the longest side
+    exceeds DISPLAY_MAX_SIDE. Aspect ratio is preserved.
+
+    Only the copy returned to the frontend is affected; the image stored in S3
+    is untouched. Images with transparency are re-encoded as PNG; everything
+    else becomes JPEG (much smaller for photos). On any failure the original
+    bytes are returned unchanged so display still works.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            width, height = image.size
+            longest = max(width, height)
+            if longest <= DISPLAY_MAX_SIDE:
+                return data
+
+            scale = DISPLAY_MAX_SIDE / longest
+            new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+            resized = image.resize(new_size, Image.LANCZOS)
+
+            has_alpha = resized.mode in ("RGBA", "LA") or (
+                resized.mode == "P" and "transparency" in resized.info
+            )
+            buffer = io.BytesIO()
+            if has_alpha:
+                resized.convert("RGBA").save(buffer, format="PNG", optimize=True)
+            else:
+                resized.convert("RGB").save(buffer, format="JPEG", quality=85)
+            return buffer.getvalue()
+    except Exception as exc:  # image decoding boundary
+        logging.warning("Failed to resize image for display: %s", exc)
+        return data
+
+
 def _fetch_annotated_image_b64(prediction_uid: Optional[str]) -> Optional[str]:
     """Download the annotated image for a prediction from YOLO and return it
     as a base64 string. Returns None if there is no prediction or the fetch fails.
@@ -155,7 +359,26 @@ def _fetch_annotated_image_b64(prediction_uid: Optional[str]) -> Optional[str]:
         return None
 
     logging.info("Fetched annotated image for prediction %s (%d bytes)", prediction_uid, len(response.content))
-    return base64.b64encode(response.content).decode("ascii")
+    return _encode_image_b64(_resize_for_display(response.content))
+
+
+def _fetch_processed_image_b64(output_key: Optional[str]) -> Optional[str]:
+    """Download a processed image from S3 by its output key and return it as a
+    base64 string. Returns None if there is no key or the download fails.
+
+    This runs outside the LLM message flow so the model never sees image data.
+    """
+    if not output_key:
+        return None
+
+    try:
+        data = download_image(output_key)
+    except Exception as exc:  # S3 access boundary
+        logging.warning("Failed to download processed image %s: %s", output_key, exc)
+        return None
+
+    logging.info("Fetched processed image %s (%d bytes)", output_key, len(data))
+    return _encode_image_b64(_resize_for_display(data))
 
 
 def run_agent(history: list, max_iterations: int = 10) -> dict:
@@ -172,12 +395,38 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
     image_url = None
     annotated_image = None
+    processed_image = None
+    # The latest usable image key for this loop. Seeded from the context var
+    # (set in chat() to the newly uploaded image or the key carried over from
+    # an earlier request). When an image-processing tool produces a new image,
+    # this is updated so later tools chain on the processed result and the key
+    # round-trips to the client for the next request.
+    latest_image_s3_key = _current_image_s3_key.get()
+    # The image_id of the current image flow. Stays fixed while image-processing
+    # tools produce new keys, and round-trips to the client so follow-up
+    # requests keep operating on the same image flow.
+    latest_image_id = _current_image_id.get()
+    # The original uploaded image key of the current flow. Stays fixed while
+    # image-processing tools produce new keys, and round-trips to the client so
+    # "detect the original image" keeps resolving to the true original.
+    original_image_s3_key = _original_image_s3_key.get()
     # Seed from the context var, which holds request.latest_prediction_id (set
     # in chat() before this runs). This lets a follow-up "show annotated image"
     # request fetch the image for a detection that ran in an EARLIER request,
     # where detect_objects does not run again. It also makes the returned
     # prediction_id round-trip so the client keeps a valid id.
     prediction_uid = _latest_prediction_uid.get()
+    # The image key the current prediction belongs to. A seeded prediction is
+    # assumed to belong to the seeded image key (the frontend keeps them in
+    # sync). This lets show_annotated_image refuse to show an annotation from a
+    # DIFFERENT (older) image than the one currently in play.
+    prediction_image_key = latest_image_s3_key if prediction_uid else None
+    # True once detect_objects produces a prediction IN THIS run. A prediction
+    # created this run is always valid for show_annotated_image, even when the
+    # detection ran on the "original" source while latest_image_s3_key points at
+    # a processed image. The stale guard only applies to predictions reused from
+    # an earlier request.
+    prediction_created_this_run = False
     tools_called: list[str] = []
     iterations = 0
     context_limit_exceeded = False
@@ -249,16 +498,62 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                 uid = tool_data.get("prediction_uid")
                 if uid:
                     prediction_uid = uid
+                    # The detection belongs to the image key it actually ran on
+                    # (which may be the current, original, or processed image).
+                    prediction_image_key = (
+                        tool_data.get("detected_image_s3_key") or latest_image_s3_key
+                    )
+                    # A prediction created this run is always valid for
+                    # show_annotated_image, even when it was detected on the
+                    # "original" source while the latest image is processed.
+                    prediction_created_this_run = True
                     _latest_prediction_uid.set(uid)
 
 
             if tool_name == "show_annotated_image":
+                # Show the annotation when we have a prediction that is valid for
+                # the image currently in play. A prediction CREATED THIS RUN is
+                # always valid (it may have been detected on the "original"
+                # source while latest_image_s3_key is a processed image). For a
+                # prediction REUSED from an earlier request, keep the stale guard
+                # so an older image's annotation is not surfaced after a newer
+                # image was uploaded or processed.
+                if prediction_uid and (
+                    prediction_created_this_run
+                    or prediction_image_key == latest_image_s3_key
+                ):
+                    tool_data = json.loads(tool_result.content)
+                    image_url = tool_data.get("image_url") or image_url
+                    # Fetch the annotated image bytes from YOLO and base64-encode
+                    # them here, OUTSIDE the LLM message flow, so the model never
+                    # sees image data (text-only architecture constraint).
+                    annotated_image = _fetch_annotated_image_b64(prediction_uid) or annotated_image
+
+            if tool_name in IMG_PROC_TOOL_NAMES:
+                # Image-processing tools return the S3 key of the processed
+                # image. Download and base64-encode it here, OUTSIDE the LLM
+                # message flow, so the client can display it (the model never
+                # sees image data).
                 tool_data = json.loads(tool_result.content)
-                image_url = tool_data.get("image_url") or image_url
-                # Fetch the annotated image bytes from YOLO and base64-encode
-                # them here, OUTSIDE the LLM message flow, so the model never
-                # sees image data (text-only architecture constraint).
-                annotated_image = _fetch_annotated_image_b64(prediction_uid) or annotated_image
+                output_key = tool_data.get("output_key")
+                if output_key:
+                    processed_image = _fetch_processed_image_b64(output_key) or processed_image
+                    # The processed image becomes the latest usable image, so a
+                    # follow-up tool (this loop or a later request) operates on
+                    # it. The image_id stays the same (same image flow). Update
+                    # the context vars too so subsequent tool calls in THIS loop
+                    # read the new key and can detect the processed image.
+                    latest_image_s3_key = output_key
+                    _current_image_s3_key.set(output_key)
+                    _latest_processed_key.set(output_key)
+                    # The processed image has no YOLO detection yet, so the old
+                    # prediction no longer applies. Reset it so a follow-up
+                    # "show annotated image" cannot surface the previous image's
+                    # result.
+                    prediction_uid = None
+                    prediction_image_key = None
+                    prediction_created_this_run = False
+                    _latest_prediction_uid.set(None)
     else:
         # The while loop finished without `break`, meaning we hit max_iterations.
         context_limit_exceeded = True
@@ -269,7 +564,11 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         "response": answer,
         "image_url": image_url,
         "annotated_image": annotated_image,
+        "processed_image": processed_image,
         "prediction_id": prediction_uid,
+        "latest_image_s3_key": latest_image_s3_key,
+        "latest_image_id": latest_image_id,
+        "original_image_s3_key": original_image_s3_key,
         "iterations": iterations,
         "tools_called": tools_called,
         "context_limit_exceeded": context_limit_exceeded,
@@ -305,6 +604,9 @@ class ChatRequest(BaseModel):
     chat_id: str                        # stable id generated once by the client
     messages: list[ChatMessage]         # full conversation thread, oldest first
     latest_prediction_id: Optional[str] = None  # prediction_id from a prior response, if any
+    latest_image_s3_key: Optional[str] = None  # S3 key of the last uploaded image, if any
+    latest_image_id: Optional[str] = None  # image_id of the current image flow, if any
+    original_image_s3_key: Optional[str] = None  # S3 key of the ORIGINAL uploaded image, if any
 
 
 class TokensUsed(BaseModel):
@@ -317,6 +619,7 @@ class ChatResponse(BaseModel):
     response: str
     prediction_id: str | None = None
     annotated_image: str | None = None
+    processed_image: str | None = None
     agent_loop_time_s: float
     iterations: int
     tools_called: list[str]
@@ -324,6 +627,15 @@ class ChatResponse(BaseModel):
     tokens_used: TokensUsed
     # Kept for backward compatibility with existing frontend clients.
     image_url: str | None = None
+    # S3 key of the image the tools operated on, so the client can send it back
+    # on a follow-up request (e.g. "rotate the previous image").
+    latest_image_s3_key: str | None = None
+    # image_id of the current image flow, sent back so the client can carry it
+    # over on follow-up requests. Distinct from prediction_id.
+    latest_image_id: str | None = None
+    # S3 key of the ORIGINAL uploaded image of the current flow. Stays fixed
+    # across image-processing so "detect the original image" resolves correctly.
+    original_image_s3_key: str | None = None
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -347,28 +659,50 @@ def chat(request: ChatRequest):
     # message. Older images were already uploaded on previous requests, so we
     # never re-upload them here.
     latest_image_s3_key = None
+    latest_image_id = None
     latest_user_msg = next(
         (m for m in reversed(request.messages) if m.role == "user"), None
     )
     if latest_user_msg and latest_user_msg.image_base64:
-        # Each new image gets its own prediction_id under the stable chat_id.
-        prediction_id = str(uuid.uuid4())
+        # Each new uploaded image gets its own image_id under the stable chat_id.
+        # This identifies the image flow and is distinct from a YOLO
+        # prediction_uid.
+        latest_image_id = str(uuid.uuid4())
         image_bytes = base64.b64decode(latest_user_msg.image_base64)
         # Preserve the real uploaded filename in the key; if the client did not
-        # send one, fall back to "<prediction_id>.jpg".
+        # send one, fall back to "<image_id>.jpg".
         image_name = safe_image_name(
-            latest_user_msg.image_filename, fallback=f"{prediction_id}.jpg"
+            latest_user_msg.image_filename, fallback=f"{latest_image_id}.jpg"
         )
         latest_image_s3_key = build_object_key(
-            chat_id, prediction_id, "original", image_name
+            chat_id, latest_image_id, "original", image_name
         )
         upload_image(latest_image_s3_key, image_bytes)
+
+    # The key the tools should operate on: the freshly uploaded image if there
+    # is one, otherwise the last image key the client carried over from an
+    # earlier request. This lets follow-ups like "rotate the previous image"
+    # work without re-uploading.
+    current_image_s3_key = latest_image_s3_key or request.latest_image_s3_key
+    # The image_id of the current image flow: the freshly generated one, or the
+    # one carried over from an earlier request.
+    current_image_id = latest_image_id or request.latest_image_id
+    # The ORIGINAL image key of the current flow. On a fresh upload this is the
+    # just-uploaded original key; otherwise it is carried over from an earlier
+    # request. It is NEVER derived from latest_image_s3_key, which may point at a
+    # processed image after image-processing tools ran.
+    current_original_image_s3_key = latest_image_s3_key or request.original_image_s3_key
+
+    # A newly uploaded image has NOT been detected yet, so any prediction id the
+    # client carried over belongs to an OLDER image and must be dropped. Only
+    # keep the carried-over prediction id when no new image was uploaded.
+    current_prediction_id = None if latest_image_s3_key else request.latest_prediction_id
 
     # When a detection from an earlier request already exists and the user did
     # NOT upload a new image, give the model an explicit, in-context signal so
     # its tool choice is deterministic: it must reuse the existing detection via
     # show_annotated_image instead of redundantly re-running detect_objects.
-    if request.latest_prediction_id and latest_image_s3_key is None:
+    if current_prediction_id and latest_image_s3_key is None:
         lc_messages.append(
             SystemMessage(
                 content=(
@@ -379,9 +713,16 @@ def chat(request: ChatRequest):
             )
         )
 
-    token_image = _current_image_s3_key.set(latest_image_s3_key)
-    token_prediction = _latest_prediction_uid.set(request.latest_prediction_id)
-    
+    token_image = _current_image_s3_key.set(current_image_s3_key)
+    token_image_id = _current_image_id.set(current_image_id)
+    # The original image key of the current flow: the freshly uploaded key, or
+    # the one carried over from an earlier request. Never derived from
+    # latest_image_s3_key, so "detect the original image" resolves to the true
+    # original even after image-processing.
+    token_original = _original_image_s3_key.set(current_original_image_s3_key)
+    token_processed = _latest_processed_key.set(None)
+    token_prediction = _latest_prediction_uid.set(current_prediction_id)
+
 
     try:
         result = run_agent(lc_messages)
@@ -389,15 +730,22 @@ def chat(request: ChatRequest):
             response=result["response"],
             prediction_id=result["prediction_id"],
             annotated_image=result["annotated_image"],
+            processed_image=result["processed_image"],
             agent_loop_time_s=result["agent_loop_time_s"],
             iterations=result["iterations"],
             tools_called=result["tools_called"],
             context_limit_exceeded=result["context_limit_exceeded"],
             tokens_used=TokensUsed(**result["tokens_used"]),
             image_url=result["image_url"],
+            latest_image_s3_key=result["latest_image_s3_key"],
+            latest_image_id=result["latest_image_id"],
+            original_image_s3_key=result["original_image_s3_key"],
         )
     finally:
         _current_image_s3_key.reset(token_image)
+        _current_image_id.reset(token_image_id)
+        _original_image_s3_key.reset(token_original)
+        _latest_processed_key.reset(token_processed)
         _latest_prediction_uid.reset(token_prediction)
         
 
