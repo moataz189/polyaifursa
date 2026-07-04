@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  frontend:
+    image: moataz189/frontend-service:0.0.2
+    ports:
+      - "3000:3000"
+    depends_on:
+      - agent
+    networks:
+      - polyai-net
+
+  agent:
+    image: moataz189/agent-service:0.0.2
+    ports:
+      - "8000:8000"
+    environment:
+      YOLO_SERVICE_URL: http://yolo:8080
+      AWS_REGION: us-east-1
+      MODEL_PROVIDER: bedrock_converse
+      MODEL: openai.gpt-oss-20b-1:0
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    depends_on:
+      - yolo
+    networks:
+      - polyai-net
+
+  yolo:
+    image: moataz189/yolo-service:0.0.5
+    ports:
+      - "8080:8080"
+    networks:
+      - polyai-net
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    depends_on:
+      - yolo
+    networks:
+      - monitoring-net
+      - polyai-net
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+
+networks:
+  polyai-net:
+  monitoring-net:
+
+volumes:
+  prometheus-data:
+  grafana-data:
