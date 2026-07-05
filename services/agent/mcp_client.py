@@ -1,69 +1,79 @@
 """MCP client helper for the image-processing MCP server.
 
 The agent talks to the image-processing tools (rotate, flip, blur, resize,
-crop, add_noise) through the Model Context Protocol over a stdio transport.
-For local development we spawn the MCP server as a subprocess:
+crop, add_noise) through the Model Context Protocol over an **HTTP** transport.
+Instead of wrapping each tool in a local ``@tool`` function, we connect to a
+running HTTP MCP server and *discover* its tools, exactly like the course
+example:
 
-    IMG_PROC_MCP_COMMAND   Executable that runs the server (default: this
-                           interpreter, i.e. sys.executable).
-    IMG_PROC_MCP_ARGS      Space-separated args passed to the command. When
-                           unset, defaults to the path of
-                           ../img-proc-mcp/app.py relative to this file.
+    client = MultiServerMCPClient({
+        "img-proc": {
+            "url": IMG_PROC_MCP_URL,
+            "transport": "http",
+        }
+    })
+    mcp_tools = await client.get_tools()   # discover tools from the server
 
-The MCP Python SDK is async-only, so `call_mcp_tool` wraps a short-lived async
-session in `asyncio.run` to expose a simple synchronous call to the agent's
-ReAct loop. A fresh subprocess/session is used per call to keep the flow
-explicit and easy to follow.
+The discovered tools are real LangChain tools. The agent binds them to the LLM
+alongside its local YOLO tools, so the model calls them directly (passing the
+image's ``input_key``); there are no hand-written wrappers in ``app.py``.
+
+The server URL is configurable:
+
+    IMG_PROC_MCP_URL   Full URL of the MCP endpoint
+                       (default: http://localhost:9000/mcp).
+
+`langchain-mcp-adapters` is async-only, so `get_mcp_tools` wraps the async
+discovery in `asyncio.run` to expose a simple synchronous call to the agent's
+startup code.
 """
 
 import asyncio
 import os
-import shlex
-import sys
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
-
-def _server_params() -> StdioServerParameters:
-    """Build the stdio parameters used to launch the img-proc MCP server."""
-    command = os.environ.get("IMG_PROC_MCP_COMMAND") or sys.executable
-
-    args_env = os.environ.get("IMG_PROC_MCP_ARGS")
-    if args_env:
-        args = shlex.split(args_env)
-    else:
-        default_app = os.path.join(
-            os.path.dirname(__file__), "..", "img-proc-mcp", "app.py"
-        )
-        args = [os.path.abspath(default_app)]
-
-    return StdioServerParameters(command=command, args=args)
+# Full URL of the running image-processing MCP server. Defaults to a local
+# server; override with IMG_PROC_MCP_URL to point at another host/port.
+IMG_PROC_MCP_URL = os.environ.get("IMG_PROC_MCP_URL", "http://localhost:9000/mcp")
 
 
-def _extract_text(result) -> str:
-    """Concatenate the text blocks of an MCP CallToolResult into one string."""
-    parts = []
-    for block in result.content:
-        text = getattr(block, "text", None)
-        if text is not None:
-            parts.append(text)
-    return "".join(parts).strip()
+def _server_config() -> dict:
+    """Return the MultiServerMCPClient config for the img-proc HTTP server."""
+    return {
+        "img-proc": {
+            "url": IMG_PROC_MCP_URL,
+            "transport": "http",
+        }
+    }
 
 
-async def _acall_tool(name: str, arguments: dict) -> str:
-    """Open a stdio MCP session, call `name` with `arguments`, return its text."""
-    async with stdio_client(_server_params()) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(name, arguments)
+def _build_client():
+    """Build a MultiServerMCPClient for the img-proc HTTP server.
 
-    if result.isError:
-        raise RuntimeError(_extract_text(result) or "MCP tool call failed")
-    return _extract_text(result)
+    The import is done lazily so that merely importing this module does not
+    require `langchain-mcp-adapters` to be installed (e.g. in tests that mock
+    the transport).
+    """
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    return MultiServerMCPClient(_server_config())
 
 
-def call_mcp_tool(name: str, arguments: dict) -> str:
-    """Synchronously call the MCP tool `name` with `arguments` and return its
-    text result (for the image tools this is the processed image's S3 key)."""
-    return asyncio.run(_acall_tool(name, arguments))
+async def _discover_tools() -> list:
+    """Connect to the HTTP MCP server and return its discovered tools as a list.
+
+    langchain-mcp-adapters 0.3.0 exposes ``get_tools()`` directly on the client,
+    so we build the client and await ``get_tools()`` without an async context
+    manager.
+    """
+    client = _build_client()
+    return await client.get_tools()
+
+
+def get_mcp_tools() -> list:
+    """Discover the image-processing MCP tools over HTTP and return them as a
+    list of LangChain tools (rotate, flip, blur, resize, crop, add_noise).
+
+    Each returned tool is bound to the server connection, so it can be invoked
+    later (via ``.ainvoke``) outside of this discovery call.
+    """
+    return asyncio.run(_discover_tools())

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import json
@@ -29,7 +30,7 @@ from langchain_core.tools import tool
 from PIL import Image
 from pydantic import BaseModel
 
-from mcp_client import call_mcp_tool
+from mcp_client import get_mcp_tools
 from s3 import build_object_key, download_image, safe_image_name, upload_image
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
@@ -56,60 +57,35 @@ if MODEL not in ALLOWED_MODELS:
     )
 
 SYSTEM_PROMPT = (
-    "You are an AI vision assistant. You help users understand and analyze images.\n"
-    "- Use the detect_objects tool to analyze an image and identify the objects in it.\n"
-    "- When show_annotated_image is used, do NOT include the image URL in the text response.\n"
-    "- The frontend will display the image automatically.\n"
-    "- Mention that the annotated image is attached, but never print the URL.\n"
-    "annotated image (the image with bounding boxes). It returns the picture with boxes drawn on it.\n"
-    "- show_annotated_image requires a prior detection. If the conversation shows that a detection "
-    "already exists, call show_annotated_image directly and do NOT re-run detect_objects. "
-    "Only call detect_objects first when no prior detection exists yet (e.g. a newly uploaded image "
-    "that has not been analyzed).\n"
-    "When the user asks to analyze, detect, identify, or describe the image, call only detect_objects.\n"
-    "Do not call show_annotated_image unless the user explicitly asks to see the annotated image, bounding boxes, marked image, or image with boxes.\n"
-    "\n"
-    "TOOL-SELECTION RULES:\n"
-    "1. When the user specifies BOTH a source image and an operation, execute it directly. "
-    "Do NOT ask for confirmation unless the request is genuinely ambiguous. For example, "
-    "'rotate 90 the original image' means call rotate on the original image right away.\n"
-    "2. Choosing which image an operation applies to:\n"
-    "   - If the user says 'original image', use the ORIGINAL uploaded image "
-    "(source='original' for detect_objects AND for image-processing tools like "
-    "rotate/flip/blur/resize/crop/add_noise).\n"
-    "   - If the user says 'current', 'latest', or 'processed image', use the latest/processed "
-    "image (source='current' or source='processed').\n"
-    "   - If the user does not specify a source, use the current/latest image "
-    "(source='current').\n"
-    "3. Combined detect + annotated requests: if the user asks to detect/analyze/identify objects "
-    "AND to show/display/attach the annotated image in the SAME request, you MUST make TWO tool "
-    "calls in order: first call detect_objects with the correct source, then call "
-    "show_annotated_image. Do NOT stop after detect_objects only.\n"
-    "4. Whole-image vs. object-specific processing:\n"
-    "   - WHOLE image: for 'blur the image', 'add noise to the image', 'crop the image to ...', "
-    "call blur/add_noise/crop directly WITHOUT bounding-box coordinates.\n"
-    "   - A SPECIFIC object (e.g. 'blur the second dog from the right', 'add noise to the detected "
-    "car', 'crop the person'): you MUST first call detect_objects, then call select_object with the "
-    "label/index/direction to get the bounding box, then call blur/add_noise/crop passing that box's "
-    "left/top/right/bottom coordinates. Ordinals map to index (first=1, second=2, third=3); 'from the "
-    "left'/'from the right' map to direction='from_left'/'from_right' (default from_left).\n"
-    "\n"
-    "EXAMPLES:\n"
-    "- 'Detect objects in the original image and show the annotated image' -> call "
-    "detect_objects(source='original'), then show_annotated_image.\n"
-    "- 'Detect objects in the current image and show annotated image' -> call "
-    "detect_objects(source='current'), then show_annotated_image.\n"
-    "- 'Can you rotate 90 the original image?' -> rotate the original image by 90 degrees "
-    "directly; do not ask for confirmation.\n"
-    "- 'Add noise to the original image' -> add_noise(source='original', amount=...).\n"
-    "- 'Rotate the current image' -> rotate(source='current', angle=...).\n"
-    "- 'Blur the second dog from the right' -> detect_objects, then "
-    "select_object(label='dog', index=2, direction='from_right'), then blur(left=..., top=..., "
-    "right=..., bottom=...) with the returned box.\n"
-    "- 'Add noise to the detected car' -> detect_objects, then select_object(label='car'), then "
-    "add_noise(left=..., top=..., right=..., bottom=..., amount=...).\n"
-    "- 'Crop the person' -> detect_objects, then select_object(label='person'), then "
-    "crop(left=..., top=..., right=..., bottom=...)."
+    """
+You are an AI vision assistant.
+
+Use tools when needed:
+- detect_objects: detect objects in the selected image.
+- show_annotated_image: show bounding boxes after detection.
+- MCP image tools: rotate, flip, blur, resize, crop, add_noise.
+
+Image keys:
+- original image -> use original_image_s3_key
+- current/latest image -> use latest_image_s3_key
+- processed image -> use latest_processed_image_s3_key if available
+
+For MCP image tools, always pass input_key.
+
+Rules:
+1. If the user asks to detect/analyze/identify objects, call detect_objects.
+2. If the user asks for annotated/bounding boxes, call show_annotated_image after detection.
+3. If the user asks for whole-image editing, call the MCP tool directly.
+4. If the user asks to edit a specific object:
+   detect_objects -> select_object -> MCP tool with left/top/right/bottom.
+5. For object rotation:
+   detect_objects -> select_object -> rotate with input_key, angle, left, top, right, bottom.
+   180 degrees is allowed for any object region.
+   90/270 degrees works only for square regions.
+
+Do not ask for confirmation when the request is clear.
+Do not print image URLs; the frontend displays images automatically.
+    """
 )
 
 _current_image_s3_key: ContextVar[Optional[str]] = ContextVar("current_image_s3_key", default=None)
@@ -120,6 +96,14 @@ _original_image_s3_key: ContextVar[Optional[str]] = ContextVar("original_image_s
 # The most recent processed image key (None until an image-processing tool runs).
 _latest_processed_key: ContextVar[Optional[str]] = ContextVar("latest_processed_key", default=None)
 _latest_prediction_uid: ContextVar[Optional[str]] = ContextVar("latest_prediction_uid", default=None)
+
+
+# Backend-side chat state, keyed by chat_id. The frontend only sends chat_id +
+# messages; the server remembers the image flow (S3 keys, image_id, prediction
+# id) between requests so those keys are NEVER exposed to the frontend.
+# NOTE: in-memory and per-process. If the agent runs with multiple workers,
+# move this to shared storage (e.g. Redis or a database) keyed by chat_id.
+_chat_state: dict[str, dict] = {}
 
 
 def _resolve_detect_source(source: Optional[str]) -> Optional[str]:
@@ -285,146 +269,11 @@ def select_object(
     return json.dumps(box)
 
 
-def _run_img_proc_tool(mcp_tool_name: str, extra_args: dict, source: str = "current") -> str:
-    """Call an image-processing MCP tool on one of the user's images.
-
-    `source` selects which image to process, exactly like detect_objects:
-    "current" (default), "original", or "processed". The input S3 key is
-    resolved from the request context so the LLM never handles raw S3 keys.
-    Returns a JSON string with the processed image's S3 key (or an error).
-    """
-    input_key = _resolve_detect_source(source)
-    if not input_key:
-        return json.dumps({"error": "No image was provided by the user."})
-
-    try:
-        output_key = call_mcp_tool(
-            mcp_tool_name, {"input_key": input_key, **extra_args}
-        )
-    except Exception as exc:  # subprocess / transport / validation boundary
-        return json.dumps({"error": str(exc)})
-
-    return json.dumps({"output_key": output_key})
-
-
-def _bbox_args(left, top, right, bottom) -> dict:
-    """Return the bbox coordinates as MCP kwargs, skipping any that are None.
-
-    All four omitted -> {} (the tool processes the WHOLE image). All four
-    provided -> a region. A partial box is forwarded as-is and rejected by the
-    MCP tool, which surfaces a clear error.
-    """
-    args = {}
-    for name, value in (("left", left), ("top", top), ("right", right), ("bottom", bottom)):
-        if value is not None:
-            args[name] = value
-    return args
-
-
-@tool
-def rotate(angle: float, source: str = "current") -> str:
-    """Rotate an image counter-clockwise by `angle` degrees.
-
-    `source` picks which image: "current" (default, latest/processed image),
-    "original" (the originally uploaded image), or "processed" (the most recent
-    processed image)."""
-    return _run_img_proc_tool("rotate", {"angle": angle}, source=source)
-
-
-@tool
-def flip(direction: str = "horizontal", source: str = "current") -> str:
-    """Flip an image "horizontal" (left-right) or "vertical" (top-bottom).
-
-    `source` picks which image: "current" (default), "original", or "processed"."""
-    return _run_img_proc_tool("flip", {"direction": direction}, source=source)
-
-
-@tool
-def blur(
-    radius: float = 2.0,
-    source: str = "current",
-    left: Optional[int] = None,
-    top: Optional[int] = None,
-    right: Optional[int] = None,
-    bottom: Optional[int] = None,
-) -> str:
-    """Apply a Gaussian blur to an image using the given `radius`.
-
-    `source` picks which image: "current" (default), "original", or "processed".
-
-    Whole-image vs. object-specific:
-    - Omit left/top/right/bottom to blur the ENTIRE image.
-    - Provide all four (e.g. the box from select_object) to blur ONLY that
-      region; the rest of the image is left untouched and the full-size image
-      is returned."""
-    extra = {"radius": radius}
-    extra.update(_bbox_args(left, top, right, bottom))
-    return _run_img_proc_tool("blur", extra, source=source)
-
-
-@tool
-def resize(width: int, height: int, source: str = "current") -> str:
-    """Resize an image to `width` x `height` pixels.
-
-    `source` picks which image: "current" (default), "original", or "processed"."""
-    return _run_img_proc_tool("resize", {"width": width, "height": height}, source=source)
-
-
-@tool
-def crop(left: int, top: int, right: int, bottom: int, source: str = "current") -> str:
-    """Crop an image to the box (left, top, right, bottom).
-
-    `source` picks which image: "current" (default), "original", or "processed"."""
-    return _run_img_proc_tool(
-        "crop", {"left": left, "top": top, "right": right, "bottom": bottom}, source=source
-    )
-
-
-@tool
-def add_noise(
-    amount: float = 0.02,
-    source: str = "current",
-    left: Optional[int] = None,
-    top: Optional[int] = None,
-    right: Optional[int] = None,
-    bottom: Optional[int] = None,
-) -> str:
-    """Add random noise to an image. `amount` is between 0 and 1.
-
-    `source` picks which image: "current" (default), "original", or "processed".
-
-    Whole-image vs. object-specific:
-    - Omit left/top/right/bottom to add noise to the ENTIRE image.
-    - Provide all four (e.g. the box from select_object) to add noise to ONLY
-      that region; the full-size image is returned."""
-    extra = {"amount": amount}
-    extra.update(_bbox_args(left, top, right, bottom))
-    return _run_img_proc_tool("add_noise", extra, source=source)
-
-
-# Registry: map tool name -> tool function
-TOOLS = {
-    detect_objects.name: detect_objects,
-    show_annotated_image.name: show_annotated_image,
-    select_object.name: select_object,
-    rotate.name: rotate,
-    flip.name: flip,
-    blur.name: blur,
-    resize.name: resize,
-    crop.name: crop,
-    add_noise.name: add_noise,
-}
-
-# Tools that produce a processed image in S3 (returning an "output_key"). Their
-# result is downloaded and returned to the client as base64 (processed_image).
-IMG_PROC_TOOL_NAMES = {
-    rotate.name,
-    flip.name,
-    blur.name,
-    resize.name,
-    crop.name,
-    add_noise.name,
-}
+# Local YOLO / business-logic tools implemented in this module. The
+# image-processing tools (rotate, flip, blur, resize, crop, add_noise) are NOT
+# defined here; they are discovered from the img-proc MCP server over HTTP and
+# combined with the local tools at startup (see ALL_TOOLS below).
+LOCAL_TOOLS = [detect_objects, show_annotated_image, select_object]
 
 # Throttle outbound LLM requests. Realistic values for a single-user dev
 # deployment: ~1 request/sec with a small burst allowance.
@@ -440,11 +289,40 @@ llm = init_chat_model(
     region_name=AWS_REGION,rate_limiter=rate_limiter
 )
 
-# Validate that the selected model supports tool calling before starting up.
-# The model profile exposes its declared capabilities; if tool calling is not
-# supported the agent cannot work, so fail fast with a clear startup error.
 
-llm_with_tools = llm.bind_tools(list(TOOLS.values()))
+def _discover_mcp_tools() -> list:
+    """Discover the img-proc MCP tools over HTTP.
+
+    Best-effort: if the MCP server is unreachable at startup the agent still
+    runs with its local YOLO tools, and a warning is logged.
+    """
+    try:
+        return get_mcp_tools()
+    except Exception as exc:  # discovery / transport boundary
+        logging.warning("Failed to discover image-processing MCP tools: %s", exc)
+        return []
+
+
+# Discover the image-processing tools from the MCP server and work directly with
+# the combined tool list. There is no manual name -> tool registry; run_agent
+# looks tools up straight from ALL_TOOLS.
+mcp_tools = _discover_mcp_tools()
+ALL_TOOLS = LOCAL_TOOLS + mcp_tools
+
+# Tool names that produce a processed image in S3 (their result is the processed
+# image's S3 key). Used ONLY for post-processing: their result is downloaded and
+# returned to the client as base64 (processed_image).
+IMG_PROC_TOOL_NAMES = {t.name for t in mcp_tools}
+
+if mcp_tools:
+    logging.info(
+        "Discovered %d image-processing MCP tool(s): %s",
+        len(mcp_tools),
+        ", ".join(sorted(IMG_PROC_TOOL_NAMES)),
+    )
+
+# The LLM is bound to the local tools plus the discovered MCP tools.
+llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 
 def _encode_image_b64(data: bytes) -> str:
@@ -534,6 +412,73 @@ def _fetch_processed_image_b64(output_key: Optional[str]) -> Optional[str]:
     return _encode_image_b64(_resize_for_display(data))
 
 
+def _build_key_context_message(
+    latest_key: Optional[str],
+    original_key: Optional[str],
+    processed_key: Optional[str],
+) -> Optional[str]:
+    """Build the per-request system message that lists the available image S3
+    keys, so the model can pass the right `input_key` to the MCP tools.
+
+    Returns None when no image key is available (nothing to process yet).
+    """
+    lines = []
+    if latest_key:
+        lines.append(f"- latest_image_s3_key (current/latest image): {latest_key}")
+    if original_key:
+        lines.append(f"- original_image_s3_key (original uploaded image): {original_key}")
+    if processed_key:
+        lines.append(
+            f"- latest_processed_image_s3_key (most recent processed image): {processed_key}"
+        )
+    if not lines:
+        return None
+
+    return (
+        "Available image S3 keys for this request. When you call an image-processing "
+        "tool (rotate, flip, blur, resize, crop, add_noise), pass the correct key as the "
+        "tool's `input_key` argument:\n" + "\n".join(lines)
+    )
+
+
+def _extract_output_key(content) -> Optional[str]:
+    """Return the processed image's S3 key from an image-processing tool result.
+
+    The MCP tools return the output S3 key directly as their text result, but we
+    also accept a JSON object with an "output_key" field for robustness. MCP
+    tools may also return a list of content blocks, e.g.
+    ``[{"type": "text", "text": "chat/img/processed/crop.png"}]`` — in that case
+    we use the text of the first block whose type is "text".
+    """
+    if not content:
+        return None
+
+    # MCP content-block list: pick the first text block's text.
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return _extract_output_key(block.get("text"))
+        return None
+
+    text = content if isinstance(content, str) else str(content)
+    text = text.strip()
+    if not text:
+        return None
+
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+
+    if isinstance(data, dict):
+        return data.get("output_key")
+    if isinstance(data, list):
+        return _extract_output_key(data)
+    if isinstance(data, str):
+        return data or None
+    return text
+
+
 def run_agent(history: list, max_iterations: int = 10) -> dict:
     """
     Simple ReAct loop:
@@ -545,7 +490,17 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
     Returns a dict with the final answer plus metadata about the loop.
     """
     start_time = time.perf_counter()
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
+    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    # Tell the model which S3 keys are in play for this request so it can pass
+    # the correct `input_key` directly to the MCP image-processing tools.
+    key_context = _build_key_context_message(
+        latest_key=_current_image_s3_key.get(),
+        original_key=_original_image_s3_key.get(),
+        processed_key=_latest_processed_key.get(),
+    )
+    if key_context:
+        messages.append(SystemMessage(content=key_context))
+    messages += history
     image_url = None
     annotated_image = None
     processed_image = None
@@ -629,7 +584,10 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
 
-            if tool_name not in TOOLS:
+            # Look the tool up directly from the combined tool list (no manual
+            # name -> tool registry).
+            tool_fn = next((t for t in ALL_TOOLS if t.name == tool_name), None)
+            if tool_fn is None:
                 messages.append(
                     ToolMessage(
                         content=json.dumps({"error": f"Unknown tool: {tool_name}"}),
@@ -638,8 +596,11 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                 )
                 continue
 
-            tool_fn = TOOLS[tool_name]
-            tool_result = tool_fn.invoke(tool_call)
+            # Discovered MCP tools are async-only; local YOLO tools are sync.
+            if tool_name in IMG_PROC_TOOL_NAMES:
+                tool_result = asyncio.run(tool_fn.ainvoke(tool_call))
+            else:
+                tool_result = tool_fn.invoke(tool_call)
 
             messages.append(tool_result)
             tools_called.append(tool_name)
@@ -683,12 +644,11 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                     annotated_image = _fetch_annotated_image_b64(prediction_uid) or annotated_image
 
             if tool_name in IMG_PROC_TOOL_NAMES:
-                # Image-processing tools return the S3 key of the processed
-                # image. Download and base64-encode it here, OUTSIDE the LLM
-                # message flow, so the client can display it (the model never
-                # sees image data).
-                tool_data = json.loads(tool_result.content)
-                output_key = tool_data.get("output_key")
+                # Image-processing MCP tools return the S3 key of the processed
+                # image as their result. Download and base64-encode it here,
+                # OUTSIDE the LLM message flow, so the client can display it (the
+                # model never sees image data).
+                output_key = _extract_output_key(tool_result.content)
                 if output_key:
                     processed_image = _fetch_processed_image_b64(output_key) or processed_image
                     # The processed image becomes the latest usable image, so a
@@ -756,10 +716,6 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     chat_id: str                        # stable id generated once by the client
     messages: list[ChatMessage]         # full conversation thread, oldest first
-    latest_prediction_id: Optional[str] = None  # prediction_id from a prior response, if any
-    latest_image_s3_key: Optional[str] = None  # S3 key of the last uploaded image, if any
-    latest_image_id: Optional[str] = None  # image_id of the current image flow, if any
-    original_image_s3_key: Optional[str] = None  # S3 key of the ORIGINAL uploaded image, if any
 
 
 class TokensUsed(BaseModel):
@@ -773,27 +729,22 @@ class ChatResponse(BaseModel):
     prediction_id: str | None = None
     annotated_image: str | None = None
     processed_image: str | None = None
+    image_url: str | None = None        # backward-compatible annotated-image URL
     agent_loop_time_s: float
     iterations: int
     tools_called: list[str]
     context_limit_exceeded: bool
     tokens_used: TokensUsed
-    # Kept for backward compatibility with existing frontend clients.
-    image_url: str | None = None
-    # S3 key of the image the tools operated on, so the client can send it back
-    # on a follow-up request (e.g. "rotate the previous image").
-    latest_image_s3_key: str | None = None
-    # image_id of the current image flow, sent back so the client can carry it
-    # over on follow-up requests. Distinct from prediction_id.
-    latest_image_id: str | None = None
-    # S3 key of the ORIGINAL uploaded image of the current flow. Stays fixed
-    # across image-processing so "detect the original image" resolves correctly.
-    original_image_s3_key: str | None = None
 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     chat_id = request.chat_id
+
+    # Load this conversation's remembered image state (S3 keys, image_id,
+    # prediction id) from the backend store. The frontend never sees or sends
+    # these; they are looked up by chat_id here.
+    state = _chat_state.get(chat_id, {})
 
     # Build the text-only conversation history for the LLM. Image bytes are
     # never sent to the model; we only mark that an image was attached.
@@ -833,23 +784,23 @@ def chat(request: ChatRequest):
         upload_image(latest_image_s3_key, image_bytes)
 
     # The key the tools should operate on: the freshly uploaded image if there
-    # is one, otherwise the last image key the client carried over from an
+    # is one, otherwise the last image key remembered for this chat from an
     # earlier request. This lets follow-ups like "rotate the previous image"
     # work without re-uploading.
-    current_image_s3_key = latest_image_s3_key or request.latest_image_s3_key
+    current_image_s3_key = latest_image_s3_key or state.get("latest_image_s3_key")
     # The image_id of the current image flow: the freshly generated one, or the
-    # one carried over from an earlier request.
-    current_image_id = latest_image_id or request.latest_image_id
+    # one remembered from an earlier request.
+    current_image_id = latest_image_id or state.get("latest_image_id")
     # The ORIGINAL image key of the current flow. On a fresh upload this is the
-    # just-uploaded original key; otherwise it is carried over from an earlier
-    # request. It is NEVER derived from latest_image_s3_key, which may point at a
-    # processed image after image-processing tools ran.
-    current_original_image_s3_key = latest_image_s3_key or request.original_image_s3_key
+    # just-uploaded original key; otherwise it is the one remembered from an
+    # earlier request. It is NEVER derived from latest_image_s3_key, which may
+    # point at a processed image after image-processing tools ran.
+    current_original_image_s3_key = latest_image_s3_key or state.get("original_image_s3_key")
 
-    # A newly uploaded image has NOT been detected yet, so any prediction id the
-    # client carried over belongs to an OLDER image and must be dropped. Only
-    # keep the carried-over prediction id when no new image was uploaded.
-    current_prediction_id = None if latest_image_s3_key else request.latest_prediction_id
+    # A newly uploaded image has NOT been detected yet, so any remembered
+    # prediction id belongs to an OLDER image and must be dropped. Only keep the
+    # remembered prediction id when no new image was uploaded.
+    current_prediction_id = None if latest_image_s3_key else state.get("latest_prediction_id")
 
     # When a detection from an earlier request already exists and the user did
     # NOT upload a new image, give the model an explicit, in-context signal so
@@ -879,6 +830,15 @@ def chat(request: ChatRequest):
 
     try:
         result = run_agent(lc_messages)
+        # Remember this conversation's image flow on the backend, keyed by
+        # chat_id, so the next request resolves the same S3 keys without the
+        # frontend ever seeing them.
+        _chat_state[chat_id] = {
+            "latest_image_s3_key": result["latest_image_s3_key"],
+            "latest_image_id": result["latest_image_id"],
+            "original_image_s3_key": result["original_image_s3_key"],
+            "latest_prediction_id": result["prediction_id"],
+        }
         return ChatResponse(
             response=result["response"],
             prediction_id=result["prediction_id"],
@@ -890,9 +850,6 @@ def chat(request: ChatRequest):
             context_limit_exceeded=result["context_limit_exceeded"],
             tokens_used=TokensUsed(**result["tokens_used"]),
             image_url=result["image_url"],
-            latest_image_s3_key=result["latest_image_s3_key"],
-            latest_image_id=result["latest_image_id"],
-            original_image_s3_key=result["original_image_s3_key"],
         )
     finally:
         _current_image_s3_key.reset(token_image)

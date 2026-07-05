@@ -13,9 +13,19 @@ Each tool works directly with S3:
 Configuration comes from the environment (see s3.py):
 
     AWS_REGION, S3_BUCKET, S3_PROCESSED_PREFIX
+
+The server runs over HTTP (Streamable HTTP transport) so the agent can connect
+to it over the network and discover its tools. Host and port are configurable:
+
+    IMG_PROC_MCP_HOST   Interface to bind to (default: 0.0.0.0).
+    IMG_PROC_MCP_PORT   TCP port to listen on (default: 9000).
+
+The tools are served under the default MCP path, so the full endpoint is
+``http://<host>:<port>/mcp``.
 """
 
 import io
+import os
 import random
 from typing import Optional
 
@@ -24,7 +34,12 @@ from PIL import Image, ImageFilter
 
 import s3
 
-mcp = FastMCP("img-proc")
+# HTTP bind configuration. 0.0.0.0 lets other containers/hosts reach the server;
+# override with IMG_PROC_MCP_HOST / IMG_PROC_MCP_PORT for local or custom setups.
+IMG_PROC_MCP_HOST = os.environ.get("IMG_PROC_MCP_HOST", "0.0.0.0")
+IMG_PROC_MCP_PORT = int(os.environ.get("IMG_PROC_MCP_PORT", "9000"))
+
+mcp = FastMCP("img-proc", host=IMG_PROC_MCP_HOST, port=IMG_PROC_MCP_PORT)
 
 
 def _load_image(input_key: str) -> Image.Image:
@@ -108,19 +123,76 @@ def _add_noise_in_place(image: Image.Image, amount: float) -> Image.Image:
 
 
 @mcp.tool()
-def rotate(input_key: str, angle: float) -> str:
+def rotate(
+    input_key: str,
+    angle: float,
+    left: Optional[int] = None,
+    top: Optional[int] = None,
+    right: Optional[int] = None,
+    bottom: Optional[int] = None,
+) -> str:
     """Rotate the image counter-clockwise by `angle` degrees.
+
+    If no bounding box is given (left/top/right/bottom all omitted), the whole
+    image is rotated with expand=True (the canvas grows to fit the rotation).
+
+    If a bounding box (left, top, right, bottom) is given, only that region is
+    rotated and pasted back into the full-size image, so the returned image
+    keeps its original dimensions. Because the rotated region must fit back into
+    the same slot, region rotation only supports right angles:
+      - 0 or 180 degrees for any rectangle.
+      - 90 or 270 degrees only when the region is square.
 
     Returns the S3 key of the processed image.
     """
+    box = _resolve_box(left, top, right, bottom)
     image = _load_image(input_key)
-    processed = image.rotate(angle, expand=True)
-    return _store_image(processed, input_key, f"rotate_{_fmt_num(angle)}")
+
+    if box is None:
+        processed = image.rotate(angle, expand=True)
+        descriptor = f"rotate_{_fmt_num(angle)}"
+    else:
+        _validate_box(box, image.size)
+        normalized = angle % 360
+        if normalized not in (0, 90, 180, 270):
+            raise ValueError(
+                "region rotation only supports 0, 90, 180, or 270 degrees"
+            )
+        left, top, right, bottom = box
+        is_square = (right - left) == (bottom - top)
+        if normalized in (90, 270) and not is_square:
+            raise ValueError(
+                "90/270 degree region rotation requires a square bounding box"
+            )
+        # expand=False keeps the rotated crop the same size so it pastes back
+        # into the same slot.
+        region = image.crop(box).rotate(normalized, expand=False)
+        image.paste(region, box)
+        processed = image
+        descriptor = (
+            f"rotate_{_fmt_num(normalized)}_box{left}_{top}_{right}_{bottom}"
+        )
+
+    return _store_image(processed, input_key, descriptor)
 
 
 @mcp.tool()
-def flip(input_key: str, direction: str = "horizontal") -> str:
+def flip(
+    input_key: str,
+    direction: str = "horizontal",
+    left: Optional[int] = None,
+    top: Optional[int] = None,
+    right: Optional[int] = None,
+    bottom: Optional[int] = None,
+) -> str:
     """Flip the image along `direction` ("horizontal" or "vertical").
+
+    If no bounding box is given (left/top/right/bottom all omitted), the whole
+    image is flipped.
+
+    If a bounding box (left, top, right, bottom) is given, only that region is
+    flipped and pasted back into the full-size image, so the returned image
+    keeps its original dimensions.
 
     Returns the S3 key of the processed image.
     """
@@ -131,9 +203,21 @@ def flip(input_key: str, direction: str = "horizontal") -> str:
     else:
         raise ValueError("direction must be 'horizontal' or 'vertical'")
 
+    box = _resolve_box(left, top, right, bottom)
     image = _load_image(input_key)
-    processed = image.transpose(transpose)
-    return _store_image(processed, input_key, f"flip_{direction}")
+
+    if box is None:
+        processed = image.transpose(transpose)
+        descriptor = f"flip_{direction}"
+    else:
+        _validate_box(box, image.size)
+        region = image.crop(box).transpose(transpose)
+        image.paste(region, box)
+        processed = image
+        left, top, right, bottom = box
+        descriptor = f"flip_{direction}_box{left}_{top}_{right}_{bottom}"
+
+    return _store_image(processed, input_key, descriptor)
 
 
 @mcp.tool()
@@ -269,4 +353,6 @@ def add_noise(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # Serve the tools over HTTP (Streamable HTTP transport) at /mcp so the agent
+    # can discover and call them over the network instead of via stdio.
+    mcp.run(transport="streamable-http")

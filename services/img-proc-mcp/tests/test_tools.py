@@ -184,3 +184,113 @@ def test_add_noise_invalid_box_raises(mock_s3):
     with pytest.raises(ValueError):
         add_noise(INPUT_KEY, amount=0.05, left=0, top=0, right=999, bottom=4)
 
+
+# --- Region rotation -------------------------------------------------------
+
+
+def test_rotate_with_box_180_preserves_dimensions(mock_s3):
+    # A 180 degree rotation works on any rectangle and keeps the full-image size.
+    key = rotate(INPUT_KEY, angle=180, left=2, top=2, right=12, bottom=8)
+    _assert_processed_key(key, mock_s3)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_rotate_with_box_180_key_format(mock_s3):
+    key = rotate(INPUT_KEY, angle=180, left=2, top=2, right=12, bottom=8)
+    assert key == "chat/pred/processed/rotate_180_box2_2_12_8_test.png"
+
+
+def test_rotate_with_square_box_90_preserves_dimensions(mock_s3):
+    # 90 degrees is allowed when the region is square.
+    key = rotate(INPUT_KEY, angle=90, left=2, top=2, right=10, bottom=10)
+    _assert_processed_key(key, mock_s3)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_rotate_with_square_box_90_key_format(mock_s3):
+    key = rotate(INPUT_KEY, angle=90, left=2, top=2, right=10, bottom=10)
+    assert key == "chat/pred/processed/rotate_90_box2_2_10_10_test.png"
+
+
+def test_rotate_non_square_box_90_raises(mock_s3):
+    with pytest.raises(ValueError, match="square bounding box"):
+        rotate(INPUT_KEY, angle=90, left=2, top=2, right=12, bottom=8)
+
+
+def test_rotate_non_square_box_270_raises(mock_s3):
+    with pytest.raises(ValueError, match="square bounding box"):
+        rotate(INPUT_KEY, angle=270, left=2, top=2, right=12, bottom=8)
+
+
+def test_rotate_box_arbitrary_angle_raises(mock_s3):
+    with pytest.raises(ValueError, match="0, 90, 180, or 270"):
+        rotate(INPUT_KEY, angle=45, left=2, top=2, right=10, bottom=10)
+
+
+def test_rotate_box_0_degrees_any_rectangle(mock_s3):
+    # 0 degrees is a no-op rotation but still valid for a rectangle.
+    key = rotate(INPUT_KEY, angle=0, left=2, top=2, right=12, bottom=8)
+    _assert_processed_key(key, mock_s3)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_rotate_partial_box_raises(mock_s3):
+    with pytest.raises(ValueError):
+        rotate(INPUT_KEY, angle=90, left=2, top=2)
+
+
+def test_rotate_invalid_box_raises(mock_s3):
+    # box exceeds image bounds
+    with pytest.raises(ValueError):
+        rotate(INPUT_KEY, angle=180, left=0, top=0, right=100, bottom=100)
+
+
+# --- Region flip -----------------------------------------------------------
+
+
+def test_flip_horizontal_with_box_returns_output_key(mock_s3):
+    key = flip(INPUT_KEY, direction="horizontal", left=2, top=2, right=10, bottom=10)
+    _assert_processed_key(key, mock_s3)
+
+
+def test_flip_horizontal_with_box_preserves_dimensions(mock_s3):
+    key = flip(INPUT_KEY, direction="horizontal", left=2, top=2, right=10, bottom=8)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_flip_horizontal_with_box_key_format(mock_s3):
+    key = flip(INPUT_KEY, direction="horizontal", left=2, top=2, right=10, bottom=8)
+    assert key == "chat/pred/processed/flip_horizontal_box2_2_10_8_test.png"
+
+
+def test_flip_vertical_with_box_returns_output_key(mock_s3):
+    key = flip(INPUT_KEY, direction="vertical", left=1, top=1, right=12, bottom=9)
+    _assert_processed_key(key, mock_s3)
+
+
+def test_flip_vertical_with_box_preserves_dimensions(mock_s3):
+    key = flip(INPUT_KEY, direction="vertical", left=1, top=1, right=12, bottom=9)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_flip_vertical_with_box_key_format(mock_s3):
+    key = flip(INPUT_KEY, direction="vertical", left=1, top=1, right=12, bottom=9)
+    assert key == "chat/pred/processed/flip_vertical_box1_1_12_9_test.png"
+
+
+def test_flip_partial_box_raises(mock_s3):
+    with pytest.raises(ValueError):
+        flip(INPUT_KEY, direction="horizontal", left=2, top=2)
+
+
+def test_flip_invalid_box_raises(mock_s3):
+    # right <= left
+    with pytest.raises(ValueError):
+        flip(INPUT_KEY, direction="horizontal", left=5, top=0, right=5, bottom=4)
+    # negative coordinate
+    with pytest.raises(ValueError):
+        flip(INPUT_KEY, direction="vertical", left=-1, top=0, right=4, bottom=4)
+    # box exceeds image bounds
+    with pytest.raises(ValueError):
+        flip(INPUT_KEY, direction="horizontal", left=0, top=0, right=100, bottom=100)
+
