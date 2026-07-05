@@ -85,6 +85,14 @@ SYSTEM_PROMPT = (
     "AND to show/display/attach the annotated image in the SAME request, you MUST make TWO tool "
     "calls in order: first call detect_objects with the correct source, then call "
     "show_annotated_image. Do NOT stop after detect_objects only.\n"
+    "4. Whole-image vs. object-specific processing:\n"
+    "   - WHOLE image: for 'blur the image', 'add noise to the image', 'crop the image to ...', "
+    "call blur/add_noise/crop directly WITHOUT bounding-box coordinates.\n"
+    "   - A SPECIFIC object (e.g. 'blur the second dog from the right', 'add noise to the detected "
+    "car', 'crop the person'): you MUST first call detect_objects, then call select_object with the "
+    "label/index/direction to get the bounding box, then call blur/add_noise/crop passing that box's "
+    "left/top/right/bottom coordinates. Ordinals map to index (first=1, second=2, third=3); 'from the "
+    "left'/'from the right' map to direction='from_left'/'from_right' (default from_left).\n"
     "\n"
     "EXAMPLES:\n"
     "- 'Detect objects in the original image and show the annotated image' -> call "
@@ -94,7 +102,14 @@ SYSTEM_PROMPT = (
     "- 'Can you rotate 90 the original image?' -> rotate the original image by 90 degrees "
     "directly; do not ask for confirmation.\n"
     "- 'Add noise to the original image' -> add_noise(source='original', amount=...).\n"
-    "- 'Rotate the current image' -> rotate(source='current', angle=...)."
+    "- 'Rotate the current image' -> rotate(source='current', angle=...).\n"
+    "- 'Blur the second dog from the right' -> detect_objects, then "
+    "select_object(label='dog', index=2, direction='from_right'), then blur(left=..., top=..., "
+    "right=..., bottom=...) with the returned box.\n"
+    "- 'Add noise to the detected car' -> detect_objects, then select_object(label='car'), then "
+    "add_noise(left=..., top=..., right=..., bottom=..., amount=...).\n"
+    "- 'Crop the person' -> detect_objects, then select_object(label='person'), then "
+    "crop(left=..., top=..., right=..., bottom=...)."
 )
 
 _current_image_s3_key: ContextVar[Optional[str]] = ContextVar("current_image_s3_key", default=None)
@@ -176,6 +191,100 @@ def show_annotated_image() -> str:
     return json.dumps({"image_url": image_url})
 
 
+def _parse_box(box):
+    """Return (left, top, right, bottom) as floats from a detection's box.
+
+    YOLO stores a box either as a list [l, t, r, b] or its string form
+    (e.g. "[12.0, 30.5, 88.0, 120.0]"); accept both.
+    """
+    if isinstance(box, str):
+        box = json.loads(box)
+    left, top, right, bottom = box
+    return float(left), float(top), float(right), float(bottom)
+
+
+def select_object_bbox(detections, label=None, index=1, direction="from_left"):
+    """Pick one detection's bounding box by label, ordinal index and direction.
+
+    - `detections`: list of dicts, each with a "label" and a "box"
+      ([left, top, right, bottom], or the string form of that list).
+    - `label`: keep only detections whose label matches (case-insensitive);
+      None keeps every detection.
+    - `index`: 1-based ordinal ("first" = 1, "second" = 2, ...).
+    - `direction`: "from_left" orders objects by ascending left coordinate,
+      "from_right" by descending left coordinate.
+
+    Returns a dict {"left", "top", "right", "bottom"} of ints. Raises ValueError
+    when the request cannot be satisfied.
+    """
+    if direction not in ("from_left", "from_right"):
+        raise ValueError("direction must be 'from_left' or 'from_right'")
+    if index < 1:
+        raise ValueError("index must be 1 or greater")
+
+    matches = []
+    for det in detections:
+        if label is not None and str(det.get("label", "")).lower() != label.lower():
+            continue
+        matches.append(_parse_box(det["box"]))
+
+    if not matches:
+        raise ValueError(f"no detections found for label {label!r}")
+
+    # Order left-to-right (or right-to-left) by the box's left coordinate.
+    matches.sort(key=lambda b: b[0], reverse=(direction == "from_right"))
+
+    if index > len(matches):
+        raise ValueError(
+            f"requested object #{index} but only {len(matches)} match(es) found"
+        )
+
+    left, top, right, bottom = matches[index - 1]
+    return {
+        "left": int(round(left)),
+        "top": int(round(top)),
+        "right": int(round(right)),
+        "bottom": int(round(bottom)),
+    }
+
+
+@tool
+def select_object(
+    label: Optional[str] = None, index: int = 1, direction: str = "from_left"
+) -> str:
+    """Select one detected object's bounding box from the most recent detection.
+
+    Run detect_objects FIRST. Then use this to pick a specific object by:
+    - `label`: object class, e.g. "dog", "car", "person" (None = any object).
+    - `index`: 1-based ordinal ("first" = 1, "second" = 2, ...).
+    - `direction`: "from_left" or "from_right" (objects are ordered by their
+      horizontal position / left edge).
+
+    Returns JSON with the chosen box: {"left", "top", "right", "bottom"}. Pass
+    these coordinates to blur/add_noise/crop to process ONLY that object.
+    """
+    prediction_uid = _latest_prediction_uid.get()
+    if not prediction_uid:
+        return json.dumps(
+            {"error": "No detection has been run yet. Run detect_objects first."}
+        )
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{YOLO_SERVICE_URL}/prediction/{prediction_uid}")
+            response.raise_for_status()
+        detections = response.json().get("detection_objects", [])
+        box = select_object_bbox(
+            detections, label=label, index=index, direction=direction
+        )
+    except ValueError as exc:  # no match / bad index / bad direction
+        return json.dumps({"error": str(exc)})
+    except Exception as exc:  # network / transport boundary
+        return json.dumps({"error": str(exc)})
+
+    return json.dumps(box)
+
+
 def _run_img_proc_tool(mcp_tool_name: str, extra_args: dict, source: str = "current") -> str:
     """Call an image-processing MCP tool on one of the user's images.
 
@@ -198,6 +307,20 @@ def _run_img_proc_tool(mcp_tool_name: str, extra_args: dict, source: str = "curr
     return json.dumps({"output_key": output_key})
 
 
+def _bbox_args(left, top, right, bottom) -> dict:
+    """Return the bbox coordinates as MCP kwargs, skipping any that are None.
+
+    All four omitted -> {} (the tool processes the WHOLE image). All four
+    provided -> a region. A partial box is forwarded as-is and rejected by the
+    MCP tool, which surfaces a clear error.
+    """
+    args = {}
+    for name, value in (("left", left), ("top", top), ("right", right), ("bottom", bottom)):
+        if value is not None:
+            args[name] = value
+    return args
+
+
 @tool
 def rotate(angle: float, source: str = "current") -> str:
     """Rotate an image counter-clockwise by `angle` degrees.
@@ -217,11 +340,26 @@ def flip(direction: str = "horizontal", source: str = "current") -> str:
 
 
 @tool
-def blur(radius: float = 2.0, source: str = "current") -> str:
+def blur(
+    radius: float = 2.0,
+    source: str = "current",
+    left: Optional[int] = None,
+    top: Optional[int] = None,
+    right: Optional[int] = None,
+    bottom: Optional[int] = None,
+) -> str:
     """Apply a Gaussian blur to an image using the given `radius`.
 
-    `source` picks which image: "current" (default), "original", or "processed"."""
-    return _run_img_proc_tool("blur", {"radius": radius}, source=source)
+    `source` picks which image: "current" (default), "original", or "processed".
+
+    Whole-image vs. object-specific:
+    - Omit left/top/right/bottom to blur the ENTIRE image.
+    - Provide all four (e.g. the box from select_object) to blur ONLY that
+      region; the rest of the image is left untouched and the full-size image
+      is returned."""
+    extra = {"radius": radius}
+    extra.update(_bbox_args(left, top, right, bottom))
+    return _run_img_proc_tool("blur", extra, source=source)
 
 
 @tool
@@ -243,17 +381,32 @@ def crop(left: int, top: int, right: int, bottom: int, source: str = "current") 
 
 
 @tool
-def add_noise(amount: float = 0.02, source: str = "current") -> str:
+def add_noise(
+    amount: float = 0.02,
+    source: str = "current",
+    left: Optional[int] = None,
+    top: Optional[int] = None,
+    right: Optional[int] = None,
+    bottom: Optional[int] = None,
+) -> str:
     """Add random noise to an image. `amount` is between 0 and 1.
 
-    `source` picks which image: "current" (default), "original", or "processed"."""
-    return _run_img_proc_tool("add_noise", {"amount": amount}, source=source)
+    `source` picks which image: "current" (default), "original", or "processed".
+
+    Whole-image vs. object-specific:
+    - Omit left/top/right/bottom to add noise to the ENTIRE image.
+    - Provide all four (e.g. the box from select_object) to add noise to ONLY
+      that region; the full-size image is returned."""
+    extra = {"amount": amount}
+    extra.update(_bbox_args(left, top, right, bottom))
+    return _run_img_proc_tool("add_noise", extra, source=source)
 
 
 # Registry: map tool name -> tool function
 TOOLS = {
     detect_objects.name: detect_objects,
     show_annotated_image.name: show_annotated_image,
+    select_object.name: select_object,
     rotate.name: rotate,
     flip.name: flip,
     blur.name: blur,
@@ -324,7 +477,7 @@ def _resize_for_display(data: bytes) -> bytes:
 
             scale = DISPLAY_MAX_SIDE / longest
             new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-            resized = image.resize(new_size, Image.LANCZOS)
+            resized = image.resize(new_size, Image.Resampling.LANCZOS)
 
             has_alpha = resized.mode in ("RGBA", "LA") or (
                 resized.mode == "P" and "transparency" in resized.info

@@ -7,6 +7,7 @@ os.environ.setdefault("MODEL", "openai.gpt-oss-20b-1:0")
 os.environ.setdefault("MODEL_PROVIDER", "bedrock_converse")
 os.environ.setdefault("AWS_REGION", "us-east-1")
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import app as app_module
@@ -529,6 +530,142 @@ def test_img_proc_processed_uses_latest_processed_key(monkeypatch):
 
     json.loads(raw)
     assert called["args"]["input_key"] == "chat-1/img-1/processed/rot_pic.png"
+
+
+# --- Object-specific selection --------------------------------------------
+
+# Two dogs and one cat. Left coordinates: dog A=10, cat=40, dog B=200.
+_SAMPLE_DETECTIONS = [
+    {"label": "dog", "box": "[10.0, 20.0, 60.0, 90.0]"},
+    {"label": "cat", "box": "[40.0, 30.0, 80.0, 100.0]"},
+    {"label": "dog", "box": [200.0, 50.0, 260.0, 140.0]},
+]
+
+
+def test_select_object_bbox_second_dog_from_right():
+    # Dogs by left coordinate: A(left=10), B(left=200). from_right -> [B, A].
+    # The SECOND dog from the right is dog A at left=10.
+    box = app_module.select_object_bbox(
+        _SAMPLE_DETECTIONS, label="dog", index=2, direction="from_right"
+    )
+    assert box == {"left": 10, "top": 20, "right": 60, "bottom": 90}
+
+
+def test_select_object_bbox_first_dog_from_right():
+    box = app_module.select_object_bbox(
+        _SAMPLE_DETECTIONS, label="dog", index=1, direction="from_right"
+    )
+    assert box == {"left": 200, "top": 50, "right": 260, "bottom": 140}
+
+
+def test_select_object_bbox_first_dog_from_left():
+    box = app_module.select_object_bbox(
+        _SAMPLE_DETECTIONS, label="dog", index=1, direction="from_left"
+    )
+    assert box == {"left": 10, "top": 20, "right": 60, "bottom": 90}
+
+
+def test_select_object_bbox_invalid_raises():
+    # Unknown label.
+    with pytest.raises(ValueError):
+        app_module.select_object_bbox(_SAMPLE_DETECTIONS, label="car")
+    # Index out of range (only two dogs).
+    with pytest.raises(ValueError):
+        app_module.select_object_bbox(_SAMPLE_DETECTIONS, label="dog", index=3)
+    # Bad direction.
+    with pytest.raises(ValueError):
+        app_module.select_object_bbox(_SAMPLE_DETECTIONS, label="dog", direction="up")
+
+
+class _FakeGetClient:
+    """Fake httpx.Client whose .get() returns a fixed prediction payload."""
+
+    payload = {"detection_objects": _SAMPLE_DETECTIONS}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url, **kwargs):
+        _FakeGetClient.captured_url = url
+        return _FakeResponse(_FakeGetClient.payload)
+
+
+def test_select_object_tool_second_dog_from_right(monkeypatch):
+    monkeypatch.setattr(app_module.httpx, "Client", _FakeGetClient)
+    app_module._latest_prediction_uid.set("pred-xyz")
+
+    raw = app_module.select_object.invoke(
+        {"label": "dog", "index": 2, "direction": "from_right"}
+    )
+
+    box = json.loads(raw)
+    assert box == {"left": 10, "top": 20, "right": 60, "bottom": 90}
+    assert _FakeGetClient.captured_url.endswith("/prediction/pred-xyz")
+
+
+def test_select_object_tool_without_detection_errors(monkeypatch):
+    app_module._latest_prediction_uid.set(None)
+    raw = app_module.select_object.invoke({"label": "dog"})
+    assert "error" in json.loads(raw)
+
+
+def test_blur_with_bbox_forwards_region_coords(monkeypatch):
+    # blur with a bounding box must forward the coordinates to the MCP tool so
+    # only that region is blurred.
+    called = {}
+
+    def fake_call_mcp_tool(name, args):
+        called["name"] = name
+        called["args"] = args
+        return "chat-1/img-1/processed/blur_box_pic.png"
+
+    monkeypatch.setattr(app_module, "call_mcp_tool", fake_call_mcp_tool)
+
+    t_cur = app_module._current_image_s3_key.set("chat-1/img-1/original/pic.png")
+    t_orig = app_module._original_image_s3_key.set("chat-1/img-1/original/pic.png")
+    t_proc = app_module._latest_processed_key.set(None)
+    try:
+        app_module.blur.invoke(
+            {"radius": 4.0, "left": 10, "top": 20, "right": 60, "bottom": 90}
+        )
+    finally:
+        app_module._current_image_s3_key.reset(t_cur)
+        app_module._original_image_s3_key.reset(t_orig)
+        app_module._latest_processed_key.reset(t_proc)
+
+    assert called["name"] == "blur"
+    assert called["args"]["left"] == 10
+    assert called["args"]["top"] == 20
+    assert called["args"]["right"] == 60
+    assert called["args"]["bottom"] == 90
+
+
+def test_blur_without_bbox_omits_region_coords(monkeypatch):
+    # Whole-image blur must NOT send any bounding-box coordinates.
+    called = {}
+
+    def fake_call_mcp_tool(name, args):
+        called["args"] = args
+        return "chat-1/img-1/processed/blur_pic.png"
+
+    monkeypatch.setattr(app_module, "call_mcp_tool", fake_call_mcp_tool)
+
+    t_cur = app_module._current_image_s3_key.set("chat-1/img-1/original/pic.png")
+    try:
+        app_module.blur.invoke({"radius": 2.0})
+    finally:
+        app_module._current_image_s3_key.reset(t_cur)
+
+    assert "left" not in called["args"]
+    assert "top" not in called["args"]
+    assert "right" not in called["args"]
+    assert "bottom" not in called["args"]
 
 
 def test_run_agent_detect_original_after_noise_uses_original_key(monkeypatch):

@@ -5,12 +5,24 @@ Each test asserts the tool returns an output key under the processed prefix,
 or raises a ValueError for invalid input.
 """
 
+import io
+
 import pytest
+from PIL import Image
 
 from app import add_noise, blur, crop, flip, resize, rotate
 
 INPUT_KEY = "chat/pred/original/test.jpeg"
 PROCESSED_DIR = "chat/pred/processed/"
+
+# The mock S3 fixture downloads a 16x16 test image (see conftest.py).
+SOURCE_SIZE = (16, 16)
+
+
+def _uploaded_size(key, uploaded):
+    """Return the (width, height) of the PNG bytes uploaded under `key`."""
+    return Image.open(io.BytesIO(uploaded[key])).size
+
 
 
 def _assert_processed_key(key, uploaded):
@@ -111,3 +123,64 @@ def test_add_noise_invalid_amount_raises(mock_s3):
         add_noise(INPUT_KEY, amount=-0.1)
     with pytest.raises(ValueError):
         add_noise(INPUT_KEY, amount=1.5)
+
+
+# --- Bounding-box (region) processing -------------------------------------
+
+
+def test_blur_with_box_returns_output_key(mock_s3):
+    key = blur(INPUT_KEY, radius=3.0, left=2, top=2, right=10, bottom=10)
+    _assert_processed_key(key, mock_s3)
+
+
+def test_blur_with_box_preserves_dimensions(mock_s3):
+    key = blur(INPUT_KEY, radius=3.0, left=2, top=2, right=10, bottom=10)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_add_noise_with_box_returns_output_key(mock_s3):
+    key = add_noise(INPUT_KEY, amount=0.05, left=1, top=1, right=8, bottom=8)
+    _assert_processed_key(key, mock_s3)
+
+
+def test_add_noise_with_box_preserves_dimensions(mock_s3):
+    key = add_noise(INPUT_KEY, amount=0.05, left=1, top=1, right=8, bottom=8)
+    assert _uploaded_size(key, mock_s3) == SOURCE_SIZE
+
+
+def test_crop_with_box_returns_region_size(mock_s3):
+    key = crop(INPUT_KEY, left=2, top=2, right=10, bottom=12)
+    assert _uploaded_size(key, mock_s3) == (8, 10)
+
+
+def test_crop_without_coordinates_raises(mock_s3):
+    with pytest.raises(ValueError):
+        crop(INPUT_KEY)
+
+
+def test_partial_box_raises(mock_s3):
+    # Supplying only some of the four coordinates is invalid for blur/add_noise.
+    with pytest.raises(ValueError):
+        blur(INPUT_KEY, radius=2.0, left=1, top=1)
+    with pytest.raises(ValueError):
+        add_noise(INPUT_KEY, amount=0.05, right=8, bottom=8)
+
+
+def test_blur_invalid_box_raises(mock_s3):
+    # right <= left
+    with pytest.raises(ValueError):
+        blur(INPUT_KEY, radius=2.0, left=5, top=0, right=5, bottom=4)
+    # negative coordinate
+    with pytest.raises(ValueError):
+        blur(INPUT_KEY, radius=2.0, left=-1, top=0, right=4, bottom=4)
+    # box exceeds image bounds
+    with pytest.raises(ValueError):
+        blur(INPUT_KEY, radius=2.0, left=0, top=0, right=100, bottom=100)
+
+
+def test_add_noise_invalid_box_raises(mock_s3):
+    with pytest.raises(ValueError):
+        add_noise(INPUT_KEY, amount=0.05, left=0, top=5, right=4, bottom=5)
+    with pytest.raises(ValueError):
+        add_noise(INPUT_KEY, amount=0.05, left=0, top=0, right=999, bottom=4)
+
