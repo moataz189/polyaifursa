@@ -40,7 +40,7 @@ jobs:
             cd polyaifursa
             git fetch origin
             git checkout ${GITHUB_REF_NAME}
-            git pull origin ${GITHUB_REF_NAME}
+            git reset --hard origin/${GITHUB_REF_NAME}
             cd services
             sed -i "s/^IMG_PROC_MCP_IMAGE_TAG=.*/IMG_PROC_MCP_IMAGE_TAG=${{ github.sha }}/" .env
             docker compose pull img-proc-mcp
