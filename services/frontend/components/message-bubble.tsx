@@ -46,6 +46,13 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
             />
           )
         )}
+        {message.processed_image && (
+          <img
+            src={`data:image/png;base64,${message.processed_image}`}
+            alt="processed"
+            className="mt-2 max-h-64 rounded-lg object-contain"
+          />
+        )}
       </div>
     </div>
   );

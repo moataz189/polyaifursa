@@ -20,8 +20,7 @@ from datetime import datetime, timezone
 from s3 import (
     download_image,
     upload_image,
-    derive_predicted_key,
-    parse_prediction_id,
+    build_annotated_key,
 )
 
 from db import get_db, init_db
@@ -88,9 +87,12 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
     if ext not in [".jpg", ".jpeg", ".png"]:
         raise HTTPException(status_code=400, detail="Only image files are supported")
 
-    uid = parse_prediction_id(image_s3_key)
+    # Every detection gets its own fresh prediction uid. The uid is NOT derived
+    # from the S3 image key, so detecting the same image twice never collides on
+    # the prediction_sessions.uid UNIQUE constraint.
+    uid = str(uuid.uuid4())
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
-    predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
+    predicted_path = os.path.join(PREDICTED_DIR, uid + ".png")
 
     image_bytes = download_image(image_s3_key)
     with open(original_path, "wb") as f:
@@ -102,9 +104,11 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
     annotated_image = Image.fromarray(annotated_frame)
     annotated_image.save(predicted_path)
 
-    predicted_s3_key = derive_predicted_key(image_s3_key)
+    # The annotated image is stored under the per-prediction folder:
+    #   <chat_id>/<image_id>/predictions/<prediction_uid>/annotated_<name>.png
+    predicted_s3_key = build_annotated_key(image_s3_key, uid)
     with open(predicted_path, "rb") as f:
-        upload_image(predicted_s3_key, f.read())
+        upload_image(predicted_s3_key, f.read(), content_type="image/png")
 
     session = PredictionSession(
         uid=uid,
@@ -178,7 +182,7 @@ def get_prediction_image(uid: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Image not found")
 
     image_bytes = download_image(session.predicted_image)
-    return Response(content=image_bytes, media_type="image/jpeg")
+    return Response(content=image_bytes, media_type="image/png")
 
 
 

@@ -6,13 +6,20 @@ export interface SendMessageResult {
   response: string;
   imageUrl: string | null;
   annotatedImage: string | null;
+  processedImage: string | null;
   predictionId: string | null;
+  latestImageS3Key: string | null;
+  latestImageId: string | null;
+  originalImageS3Key: string | null;
 }
 
 export async function sendMessage(
   chatId: string,
   messages: ChatMessage[],
-  latestPredictionId: string | null
+  latestPredictionId: string | null,
+  latestImageS3Key: string | null,
+  latestImageId: string | null,
+  originalImageS3Key: string | null
 ): Promise<SendMessageResult> {
   const res = await fetch(`${AGENT_URL}/chat`, {
     method: "POST",
@@ -21,6 +28,9 @@ export async function sendMessage(
       chat_id: chatId,
       messages,
       latest_prediction_id: latestPredictionId,
+      latest_image_s3_key: latestImageS3Key,
+      latest_image_id: latestImageId,
+      original_image_s3_key: originalImageS3Key,
     }),
   });
   if (!res.ok) {
@@ -35,8 +45,21 @@ export async function sendMessage(
     imageUrl: data.image_url ?? null,
     // Base64-encoded annotated image (with bounding boxes), or null.
     annotatedImage: data.annotated_image ?? null,
+    // Base64-encoded processed image (rotate/blur/flip/resize/crop/noise), or null.
+    processedImage: data.processed_image ?? null,
     // Most recent prediction id, sent back on future requests so a later
     // "show annotated image" can find the previous detection.
     predictionId: data.prediction_id ?? null,
+    // Latest usable image S3 key (uploaded or produced by a processing tool).
+    // Sent back on future requests so follow-ups operate on the same image.
+    // Never displayed to the user.
+    latestImageS3Key: data.latest_image_s3_key ?? null,
+    // image_id of the current image flow. Distinct from predictionId. Sent back
+    // on future requests so follow-ups stay within the same image flow.
+    latestImageId: data.latest_image_id ?? null,
+    // S3 key of the ORIGINAL uploaded image. Stays fixed across processing so
+    // "detect the original image" resolves correctly. Sent back on future
+    // requests. Never displayed to the user.
+    originalImageS3Key: data.original_image_s3_key ?? null,
   };
 }

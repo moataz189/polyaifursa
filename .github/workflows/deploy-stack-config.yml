@@ -1,0 +1,37 @@
+name: Deploy Stack Config
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "services/docker-compose.yaml"
+      - "services/prometheus.yml"
+      - ".github/workflows/deploy-stack-config.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy stack config
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_HOST || secrets.DEV_INSTANCE_HOST }}
+          username: ubuntu
+          key: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_SSH_KEY || secrets.DEV_INSTANCE_SSH_KEY }}
+          script: |
+            cd ~
+
+            if [ ! -d polyaifursa ]; then
+              git clone https://github.com/moataz189/polyaifursa.git
+            fi
+
+            cd polyaifursa
+            git fetch origin
+            git checkout ${GITHUB_REF_NAME}
+            git pull origin ${GITHUB_REF_NAME}
+
+            cd services
+            docker compose up -d
