@@ -51,10 +51,12 @@ jobs:
             fi
 
             cd polyaifursa
-            git fetch origin
-            git checkout ${GITHUB_REF_NAME}
-            git reset --hard origin/${GITHUB_REF_NAME}
+            BRANCH="${{ github.ref_name }}"
 
+            git fetch origin
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+          
             cd services
 
             sed -i "s/^AGENT_IMAGE_TAG=.*/AGENT_IMAGE_TAG=${{ github.sha }}/" .env

@@ -39,9 +39,10 @@ jobs:
               git clone https://github.com/moataz189/polyaifursa.git
             fi
             cd polyaifursa
+            BRANCH="${{ github.ref_name }}"
             git fetch origin
-            git checkout ${GITHUB_REF_NAME}
-            git reset --hard origin/${GITHUB_REF_NAME}
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
             cd services
             sed -i "s/^FRONTEND_IMAGE_TAG=.*/FRONTEND_IMAGE_TAG=${{ github.sha }}/" .env
             docker compose pull frontend
