@@ -20,6 +20,7 @@ jobs:
         with:
           context: services/yolo
           push: true
+          platforms: linux/amd64
           tags: moataz189/yolo-service:${{ github.sha }}
 
   deploy:

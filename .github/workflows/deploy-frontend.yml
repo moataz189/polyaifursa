@@ -20,6 +20,7 @@ jobs:
         with:
           context: services/frontend
           push: true
+          platforms: linux/amd64
           tags: moataz189/frontend-service:${{ github.sha }}
 
   deploy:

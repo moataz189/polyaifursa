@@ -20,6 +20,7 @@ jobs:
         with:
           context: services/img-proc-mcp
           push: true
+          platforms: linux/amd64
           tags: moataz189/img-proc-mcp:${{ github.sha }}
 
   deploy:
