@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   frontend:
-    image: moataz189/frontend-service:0.0.2
+    image: moataz189/frontend-service:${FRONTEND_IMAGE_TAG}
     ports:
       - "3000:3000"
     depends_on:
@@ -11,56 +11,72 @@ services:
       - polyai-net
 
   agent:
-    image: moataz189/agent-service:0.0.2
+    image: moataz189/agent-service:${AGENT_IMAGE_TAG}
     ports:
       - "8000:8000"
-    environment:
-      YOLO_SERVICE_URL: http://yolo:8080
-      AWS_REGION: us-east-1
-      MODEL_PROVIDER: bedrock_converse
-      MODEL: openai.gpt-oss-20b-1:0
-    volumes:
-      - ~/.aws:/root/.aws:ro
     depends_on:
       - yolo
+      - img-proc-mcp
+    env_file:
+      - agent/.env
     networks:
       - polyai-net
 
   yolo:
-    image: moataz189/yolo-service:0.0.5
+    image: moataz189/yolo-service:${YOLO_IMAGE_TAG}
     ports:
       - "8080:8080"
+    env_file:
+      - yolo/.env
+    networks:
+      - polyai-net
+
+  img-proc-mcp:
+    image: moataz189/img-proc-mcp:${IMG_PROC_MCP_IMAGE_TAG}
+    ports:
+      - "9000:9000"
+    env_file:
+      - img-proc-mcp/.env
     networks:
       - polyai-net
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - yolo
+      - node-exporter
     networks:
-      - monitoring-net
       - polyai-net
+      - monitoring-net
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:latest
     ports:
       - "3001:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+    volumes:
+      - grafana-data:/var/lib/grafana
     networks:
       - monitoring-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring-net
+
+volumes:
+  grafana-data:
 
 networks:
   polyai-net:
-  monitoring-net:
+    driver: bridge
 
-volumes:
-  prometheus-data:
-  grafana-data:
+  monitoring-net:
+    driver: bridge

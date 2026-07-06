@@ -30,7 +30,8 @@ startup code.
 
 import asyncio
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 # Full URL of the running image-processing MCP server. Defaults to a local
 # server; override with IMG_PROC_MCP_URL to point at another host/port.
 IMG_PROC_MCP_URL = os.environ.get("IMG_PROC_MCP_URL", "http://localhost:9000/mcp")

@@ -1,0 +1,47 @@
+name: Deploy YOLO
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "services/yolo/**"
+      - ".github/workflows/deploy-yolo.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/yolo
+          push: true
+          tags: moataz189/yolo-service:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy yolo
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_HOST || secrets.DEV_INSTANCE_HOST }}
+          username: ubuntu
+          key: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_SSH_KEY || secrets.DEV_INSTANCE_SSH_KEY }}
+          script: |
+            cd ~
+            if [ ! -d polyaifursa ]; then
+              git clone https://github.com/moataz189/polyaifursa.git
+            fi
+            cd polyaifursa
+            git fetch origin
+            git checkout ${GITHUB_REF_NAME}
+            git pull origin ${GITHUB_REF_NAME}
+            cd services
+            sed -i "s/^YOLO_IMAGE_TAG=.*/YOLO_IMAGE_TAG=${{ github.sha }}/" .env
+            docker compose pull yolo
+            docker compose up -d yolo
