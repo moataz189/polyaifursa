@@ -5,7 +5,8 @@ WORKDIR /app
 COPY package*.json ./
 
 RUN npm install && npm cache clean --force
-
+ARG NEXT_PUBLIC_AGENT_URL
+ENV NEXT_PUBLIC_AGENT_URL=$NEXT_PUBLIC_AGENT_URL
 COPY . .
 
 RUN npm run build
