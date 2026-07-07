@@ -649,7 +649,7 @@ def run_agent(history: list, max_iterations: int = 10) -> dict:
                 # OUTSIDE the LLM message flow, so the client can display it (the
                 # model never sees image data).
                 output_key = _extract_output_key(tool_result.content)
-                if output_key:
+                if output_key and not output_key.lower().startswith("error"):
                     processed_image = _fetch_processed_image_b64(output_key) or processed_image
                     # The processed image becomes the latest usable image, so a
                     # follow-up tool (this loop or a later request) operates on
