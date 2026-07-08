@@ -25,19 +25,6 @@ export default function Chat() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-  // Most recent prediction id returned by the backend. Sent on the next
-  // request so a later "show annotated image" can find the prior detection.
-  const latestPredictionIdRef = useRef<string | null>(null);
-  // Latest usable image S3 key (uploaded or produced by a processing tool).
-  // Sent on the next request so follow-ups operate on the same image. Not
-  // shown to the user.
-  const latestImageS3KeyRef = useRef<string | null>(null);
-  // image_id of the current image flow. Distinct from the prediction id. Sent
-  // on the next request so follow-ups stay within the same image flow.
-  const latestImageIdRef = useRef<string | null>(null);
-  // S3 key of the ORIGINAL uploaded image. Stays fixed across processing so
-  // "detect the original image" resolves correctly. Sent on the next request.
-  const originalImageS3KeyRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -78,16 +65,6 @@ export default function Chat() {
       ...(imageB64 && imageFilename ? { image_filename: imageFilename } : {}),
     };
 
-    // A newly attached image has no detection yet, so drop the old prediction
-    // id (and image key) before sending. The backend also resets these, but
-    // clearing here keeps the client from carrying an older image's state.
-    if (imageB64) {
-      latestPredictionIdRef.current = null;
-      latestImageS3KeyRef.current = null;
-      latestImageIdRef.current = null;
-      originalImageS3KeyRef.current = null;
-    }
-
     const next = [...messages, userMessage];
     setMessages(next);
     setInput("");
@@ -98,22 +75,8 @@ export default function Chat() {
     setLoading(true);
 
     try {
-      const { response, imageUrl, annotatedImage, processedImage, predictionId, latestImageS3Key, latestImageId, originalImageS3Key } =
-        await sendMessage(
-          chatIdRef.current,
-          next,
-          latestPredictionIdRef.current,
-          latestImageS3KeyRef.current,
-          latestImageIdRef.current,
-          originalImageS3KeyRef.current
-        );
-      // Always store the newest state from the response, even when it is null
-      // (e.g. a processed image resets the prediction id), so future requests
-      // never reuse an older image's prediction/key.
-      latestPredictionIdRef.current = predictionId;
-      latestImageS3KeyRef.current = latestImageS3Key;
-      latestImageIdRef.current = latestImageId;
-      originalImageS3KeyRef.current = originalImageS3Key;
+      const { response, imageUrl, annotatedImage, processedImage } =
+        await sendMessage(chatIdRef.current, next);
       setMessages([
         ...next,
         {
