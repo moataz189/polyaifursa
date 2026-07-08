@@ -48,6 +48,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
     depends_on:
       - yolo
       - node-exporter
@@ -70,11 +71,21 @@ services:
     image: prom/node-exporter:latest
     ports:
       - "9100:9100"
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
 
 volumes:
   grafana-data:
+  prometheus-data:
 
 networks:
   polyai-net:
