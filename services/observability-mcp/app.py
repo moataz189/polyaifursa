@@ -7,7 +7,7 @@ from typing import Any, Iterator, Literal
 import boto3
 import requests
 from botocore.exceptions import BotoCoreError, ClientError
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 
 Environment = Literal["dev", "prod"]
@@ -320,7 +320,7 @@ def read_matching_logs(
     }
 
 
-@mcp.tool
+@mcp.tool()
 def get_container_logs(
     container_name: str,
     minutes: int = 5,
@@ -365,7 +365,7 @@ def get_container_logs(
         }
 
 
-@mcp.tool
+@mcp.tool()
 def get_container_logs_at_time(
     container_name: str,
     timestamp: str,
@@ -413,7 +413,7 @@ def get_container_logs_at_time(
         }
 
 
-@mcp.tool
+@mcp.tool()
 def list_log_containers(
     minutes: int = 60,
     environment: Environment = "dev",
@@ -466,7 +466,7 @@ def list_log_containers(
         }
 
 
-@mcp.tool
+@mcp.tool()
 def query_prometheus(
     query: str,
     environment: Environment = "dev",
@@ -501,7 +501,7 @@ def query_prometheus(
         }
 
 
-@mcp.tool
+@mcp.tool()
 def get_cpu_usage(
     minutes: int = 10,
     environment: Environment = "dev",
