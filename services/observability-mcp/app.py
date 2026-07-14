@@ -505,7 +505,7 @@ def query_prometheus(
 def get_cpu_usage(
     minutes: int = 10,
     environment: Environment = "dev",
-    step_seconds: int = 30,
+    step_seconds: int = 20,
 ) -> dict[str, Any]:
     """
     Return EC2 CPU usage percentage from Prometheus for a time range.
@@ -524,10 +524,13 @@ def get_cpu_usage(
     start = end - timedelta(minutes=minutes)
 
     query = (
-        '100 * (1 - avg(rate('
-        'node_cpu_seconds_total{mode="idle"}[2m]'
-        ")))"
-    )
+    '100 * (1 - avg(rate('
+    'node_cpu_seconds_total{'
+    'mode="idle",'
+    'instance="node-exporter:9100",'
+    'job="node-exporter"'
+    '}[1m])))'
+)
 
     try:
         response = requests.get(
