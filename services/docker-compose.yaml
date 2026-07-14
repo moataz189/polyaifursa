@@ -11,12 +11,7 @@ services:
       - frontend/.env
     networks:
       - polyai-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "frontend"
+
 
   agent:
     image: moataz189/agent-service:${AGENT_IMAGE_TAG}
@@ -29,13 +24,7 @@ services:
       - agent/.env
     networks:
       - polyai-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "agent"
-
+ 
   yolo:
     image: moataz189/yolo-service:${YOLO_IMAGE_TAG}
     ports:
@@ -44,12 +33,7 @@ services:
       - yolo/.env
     networks:
       - polyai-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "yolo"
+   
 
   img-proc-mcp:
     image: moataz189/img-proc-mcp:${IMG_PROC_MCP_IMAGE_TAG}
@@ -59,12 +43,7 @@ services:
       - img-proc-mcp/.env
     networks:
       - polyai-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "img-proc-mcp"
+  
 
   prometheus:
     image: prom/prometheus:latest
@@ -79,12 +58,7 @@ services:
     networks:
       - polyai-net
       - monitoring-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "prometheus"
+  
 
   grafana:
     image: grafana/grafana:latest
@@ -96,12 +70,7 @@ services:
       - grafana-data:/var/lib/grafana
     networks:
       - monitoring-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "grafana"
+  
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -118,23 +87,20 @@ services:
       - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
-    logging:
-      driver: fluentd
-      options:
-        fluentd-address: "127.0.0.1:24224"
-        fluentd-async: "true"
-        tag: "node-exporter"
+
 
   #add fluent-bit service to the docker-compose file
-  fluent-bit:
-    image: fluent/fluent-bit:4.2.7
-    ports:
-      - "127.0.0.1:24224:24224"
-    volumes:
-      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-    restart: unless-stopped
-    networks:
-      - monitoring-net
+fluent-bit:
+  image: fluent/fluent-bit:4.2.7
+  volumes:
+    - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    - /var/log/journal:/var/log/journal:ro
+    - /run/log/journal:/run/log/journal:ro
+    - /etc/machine-id:/etc/machine-id:ro
+    - /var/log:/var/log
+  restart: unless-stopped
+  networks:
+    - monitoring-net
 
 volumes:
   grafana-data:
