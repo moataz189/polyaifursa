@@ -1,0 +1,4 @@
+fastmcp
+boto3
+requests
+python-dotenv

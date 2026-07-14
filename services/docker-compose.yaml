@@ -11,6 +11,13 @@ services:
       - frontend/.env
     networks:
       - polyai-net
+    
+    labels:
+      container_name: frontend-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
 
 
   agent:
@@ -24,6 +31,14 @@ services:
       - agent/.env
     networks:
       - polyai-net
+    
+    labels:
+      container_name: agent-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name    
+    
  
   yolo:
     image: moataz189/yolo-service:${YOLO_IMAGE_TAG}
@@ -33,7 +48,12 @@ services:
       - yolo/.env
     networks:
       - polyai-net
-   
+    labels:
+      container_name: yolo-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name   
 
   img-proc-mcp:
     image: moataz189/img-proc-mcp:${IMG_PROC_MCP_IMAGE_TAG}
@@ -43,6 +63,13 @@ services:
       - img-proc-mcp/.env
     networks:
       - polyai-net
+    labels:
+      container_name: img-proc-mcp-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+
   
 
   prometheus:
@@ -58,6 +85,12 @@ services:
     networks:
       - polyai-net
       - monitoring-net
+    labels:
+      container_name: prometheus-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
   
 
   grafana:
@@ -70,6 +103,12 @@ services:
       - grafana-data:/var/lib/grafana
     networks:
       - monitoring-net
+    labels:
+      container_name: grafana-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
   
 
   node-exporter:
@@ -87,6 +126,12 @@ services:
       - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
+    labels:
+      container_name: node-exporter-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
 
 
   #add fluent-bit service to the docker-compose file
