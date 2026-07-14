@@ -40,4 +40,5 @@ jobs:
             cd services
 
             docker compose config
+            docker compose up -d --force-recreate
             docker compose up -d
