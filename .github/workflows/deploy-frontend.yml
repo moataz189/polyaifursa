@@ -23,7 +23,7 @@ jobs:
           platforms: linux/amd64
           tags: moataz189/frontend-service:${{ github.sha }}
           build-args: |
-            NEXT_PUBLIC_AGENT_URL=http://moataz-prod.fursa.click:8000
+            NEXT_PUBLIC_AGENT_URL=http://moataz-dev.fursa.click:8000
 
   deploy:
     runs-on: ubuntu-latest
