@@ -82,7 +82,7 @@ services:
       - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
-    
+  #add fluent-bit service to the docker-compose file
   fluent-bit:
     image: fluent/fluent-bit:4.2.7
     volumes:
