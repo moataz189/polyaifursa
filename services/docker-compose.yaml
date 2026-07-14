@@ -82,6 +82,17 @@ services:
       - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
+    
+  fluent-bit:
+    image: fluent/fluent-bit:4.2.7
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log
+    restart: unless-stopped
+    networks:
+      - monitoring-net
+   
 
 volumes:
   grafana-data:
