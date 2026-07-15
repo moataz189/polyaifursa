@@ -2,65 +2,156 @@ version: "3.9"
 
 services:
   frontend:
-    image: moataz189/frontend-service:0.0.2
+    image: moataz189/frontend-service:${FRONTEND_IMAGE_TAG}
     ports:
       - "3000:3000"
     depends_on:
       - agent
+    env_file:
+      - frontend/.env
     networks:
       - polyai-net
+    
+    labels:
+      container_name: frontend-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+
 
   agent:
-    image: moataz189/agent-service:0.0.2
+    image: moataz189/agent-service:${AGENT_IMAGE_TAG}
     ports:
       - "8000:8000"
-    environment:
-      YOLO_SERVICE_URL: http://yolo:8080
-      AWS_REGION: us-east-1
-      MODEL_PROVIDER: bedrock_converse
-      MODEL: openai.gpt-oss-20b-1:0
-    volumes:
-      - ~/.aws:/root/.aws:ro
     depends_on:
       - yolo
+      - img-proc-mcp
+    env_file:
+      - agent/.env
     networks:
       - polyai-net
-
+    
+    labels:
+      container_name: agent-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name    
+    
+ 
   yolo:
-    image: moataz189/yolo-service:0.0.5
+    image: moataz189/yolo-service:${YOLO_IMAGE_TAG}
     ports:
       - "8080:8080"
+    env_file:
+      - yolo/.env
     networks:
       - polyai-net
+    labels:
+      container_name: yolo-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name   
+
+  img-proc-mcp:
+    image: moataz189/img-proc-mcp:${IMG_PROC_MCP_IMAGE_TAG}
+    ports:
+      - "9000:9000"
+    env_file:
+      - img-proc-mcp/.env
+    networks:
+      - polyai-net
+    labels:
+      container_name: img-proc-mcp-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+
+  
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     depends_on:
       - yolo
+      - node-exporter
     networks:
-      - monitoring-net
       - polyai-net
+      - monitoring-net
+    labels:
+      container_name: prometheus-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+  
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:latest
     ports:
       - "3001:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+    volumes:
+      - grafana-data:/var/lib/grafana
     networks:
       - monitoring-net
+    labels:
+      container_name: grafana-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+  
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    networks:
+      - monitoring-net
+    labels:
+      container_name: node-exporter-service
+    logging:
+      driver: json-file
+      options:
+        labels: container_name
+
+
+  #add fluent-bit service to the docker-compose file
+  fluent-bit:
+    image: fluent/fluent-bit:4.2.7
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log
+    restart: unless-stopped
+    networks:
+      - monitoring-net
+
+volumes:
+  grafana-data:
+  prometheus-data:
 
 networks:
   polyai-net:
-  monitoring-net:
+    driver: bridge
 
-volumes:
-  prometheus-data:
-  grafana-data:
+  monitoring-net:
+    driver: bridge

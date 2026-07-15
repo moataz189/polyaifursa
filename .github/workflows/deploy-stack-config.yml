@@ -1,0 +1,44 @@
+name: Deploy Stack Config
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "services/docker-compose.yaml"
+      - "services/prometheus.yml"
+      - "services/fluent-bit.conf"
+      - ".github/workflows/deploy-stack-config.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy stack config
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ github.ref_name == 'main' && secrets.PROD_INSTANCE_HOST || secrets.DEV_INSTANCE_HOST }}
+          username: ubuntu
+          key: ${{ github.ref_name == 'main' && secrets.PROD_INSTANCE_SSH_KEY || secrets.DEV_INSTANCE_SSH_KEY }}
+          script: |
+            set -e
+
+            cd ~
+
+            if [ ! -d polyaifursa ]; then
+              git clone https://github.com/moataz189/polyaifursa.git
+            fi
+
+            cd polyaifursa
+
+            git fetch origin
+            git checkout ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }}
+
+            cd services
+
+            docker compose config
+            docker compose up -d --force-recreate
+            docker compose up -d

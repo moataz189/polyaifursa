@@ -1,0 +1,51 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "services/frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/frontend
+          push: true
+          platforms: linux/amd64
+          tags: moataz189/frontend-service:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_AGENT_URL=http://moataz-prod.fursa.click:8000
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy frontend
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_HOST || secrets.DEV_INSTANCE_HOST }}
+          username: ubuntu
+          key: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_SSH_KEY || secrets.DEV_INSTANCE_SSH_KEY }}
+          script: |
+            cd ~
+            if [ ! -d polyaifursa ]; then
+              git clone https://github.com/moataz189/polyaifursa.git
+            fi
+            cd polyaifursa
+            BRANCH="${{ github.ref_name }}"
+            git fetch origin
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            cd services
+            sed -i "s/^FRONTEND_IMAGE_TAG=.*/FRONTEND_IMAGE_TAG=${{ github.sha }}/" .env
+            docker compose pull frontend
+            docker compose up -d frontend

@@ -5,4 +5,5 @@ export interface ChatMessage {
   image_filename?: string;
   image_url?: string;
   annotated_image?: string | null;
+  processed_image?: string | null;
 }

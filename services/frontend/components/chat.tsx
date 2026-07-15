@@ -25,9 +25,6 @@ export default function Chat() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-  // Most recent prediction id returned by the backend. Sent on the next
-  // request so a later "show annotated image" can find the prior detection.
-  const latestPredictionIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -78,9 +75,8 @@ export default function Chat() {
     setLoading(true);
 
     try {
-      const { response, imageUrl, annotatedImage, predictionId } =
-        await sendMessage(chatIdRef.current, next, latestPredictionIdRef.current);
-      if (predictionId) latestPredictionIdRef.current = predictionId;
+      const { response, imageUrl, annotatedImage, processedImage } =
+        await sendMessage(chatIdRef.current, next);
       setMessages([
         ...next,
         {
@@ -88,6 +84,7 @@ export default function Chat() {
           content: response,
           ...(imageUrl ? { image_url: imageUrl } : {}),
           ...(annotatedImage ? { annotated_image: annotatedImage } : {}),
+          ...(processedImage ? { processed_image: processedImage } : {}),
         },
       ]);
     } catch (err) {

@@ -6,13 +6,12 @@ export interface SendMessageResult {
   response: string;
   imageUrl: string | null;
   annotatedImage: string | null;
-  predictionId: string | null;
+  processedImage: string | null;
 }
 
 export async function sendMessage(
   chatId: string,
-  messages: ChatMessage[],
-  latestPredictionId: string | null
+  messages: ChatMessage[]
 ): Promise<SendMessageResult> {
   const res = await fetch(`${AGENT_URL}/chat`, {
     method: "POST",
@@ -20,7 +19,6 @@ export async function sendMessage(
     body: JSON.stringify({
       chat_id: chatId,
       messages,
-      latest_prediction_id: latestPredictionId,
     }),
   });
   if (!res.ok) {
@@ -35,8 +33,7 @@ export async function sendMessage(
     imageUrl: data.image_url ?? null,
     // Base64-encoded annotated image (with bounding boxes), or null.
     annotatedImage: data.annotated_image ?? null,
-    // Most recent prediction id, sent back on future requests so a later
-    // "show annotated image" can find the previous detection.
-    predictionId: data.prediction_id ?? null,
+    // Base64-encoded processed image (rotate/blur/flip/resize/crop/noise), or null.
+    processedImage: data.processed_image ?? null,
   };
 }

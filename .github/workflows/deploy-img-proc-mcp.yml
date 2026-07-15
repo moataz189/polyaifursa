@@ -1,0 +1,50 @@
+name: Deploy Image MCP
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "services/img-proc-mcp/**"
+      - ".github/workflows/deploy-img-proc-mcp.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/img-proc-mcp
+          push: true
+          platforms: linux/amd64
+          tags: moataz189/img-proc-mcp:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy img-proc-mcp
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_HOST || secrets.DEV_INSTANCE_HOST }}
+          username: ubuntu
+          key: ${{ github.ref == 'refs/heads/main' && secrets.PROD_INSTANCE_SSH_KEY || secrets.DEV_INSTANCE_SSH_KEY }}
+          script: |
+            cd ~
+            if [ ! -d polyaifursa ]; then
+              git clone https://github.com/moataz189/polyaifursa.git
+            fi
+            cd polyaifursa
+            BRANCH="${{ github.ref_name }}"
+
+            git fetch origin
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            cd services
+            sed -i "s/^IMG_PROC_MCP_IMAGE_TAG=.*/IMG_PROC_MCP_IMAGE_TAG=${{ github.sha }}/" .env
+            docker compose pull img-proc-mcp
+            docker compose up -d img-proc-mcp

@@ -35,7 +35,7 @@ def safe_image_name(filename: Optional[str], fallback: Optional[str] = None) -> 
     Preserves the original uploaded filename and its extension, but uses
     os.path.basename() to strip any directory components so the value cannot
     inject extra path segments (or a leading slash) into the key. When no usable
-    filename is supplied it returns `fallback` (e.g. "<prediction_id>.jpg"), or a
+    filename is supplied it returns `fallback` (e.g. "<image_id>.jpg"), or a
     generated name if no fallback was provided.
     """
     name = os.path.basename((filename or "").strip())
@@ -44,14 +44,15 @@ def safe_image_name(filename: Optional[str], fallback: Optional[str] = None) -> 
     return name
 
 
-def build_object_key(chat_id: str, prediction_id: str, stage: str, image_name: str) -> str:
+def build_object_key(chat_id: str, image_id: str, stage: str, image_name: str) -> str:
     """Build an S3 object key with the recommended structure:
 
-        <chat_id>/<prediction_id>/<stage>/<image_name>
+        <chat_id>/<image_id>/<stage>/<image_name>
 
-    `stage` is "original" or "predicted".
+    `stage` is "original" or "processed". The <image_id> identifies the uploaded
+    image flow and is distinct from a YOLO prediction_uid.
     """
-    return f"{chat_id}/{prediction_id}/{stage}/{image_name}"
+    return f"{chat_id}/{image_id}/{stage}/{image_name}"
 
 
 def upload_image(key: str, data: bytes, content_type: str = "image/jpeg") -> str:
@@ -63,3 +64,9 @@ def upload_image(key: str, data: bytes, content_type: str = "image/jpeg") -> str
         ContentType=content_type,
     )
     return key
+
+
+def download_image(key: str) -> bytes:
+    """Download the object stored under `key` and return its raw bytes."""
+    response = get_s3_client().get_object(Bucket=AWS_S3_BUCKET, Key=key)
+    return response["Body"].read()

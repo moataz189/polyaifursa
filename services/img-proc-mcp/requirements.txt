@@ -1,0 +1,6 @@
+mcp>=1.2.0
+uvicorn
+Pillow
+boto3
+
+pytest>=7.0.0
