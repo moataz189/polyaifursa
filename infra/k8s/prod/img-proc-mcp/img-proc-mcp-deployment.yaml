@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: img-proc-mcp
+  namespace: prod
+  labels:
+    app: img-proc-mcp
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: img-proc-mcp
+
+  template:
+    metadata:
+      labels:
+        app: img-proc-mcp
+
+    spec:
+      containers:
+        - name: img-proc-mcp
+          image: moataz189/img-proc-mcp:bd585ff775cc135901d824563d413c1c3e22d3b4
+
+          ports:
+            - containerPort: 9000
+
+          env:
+            - name: AWS_REGION
+              value: "us-east-1"
+
+            - name: S3_BUCKET
+              value: "moataz-polyai-images"
+
+            - name: S3_PROCESSED_PREFIX
+              value: "processed/"

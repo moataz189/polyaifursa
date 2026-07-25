@@ -1,0 +1,102 @@
+name: Provision Kubernetes Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: AWS region
+        required: true
+        default: us-east-1
+
+jobs:
+  terraform:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+
+    outputs:
+      control_plane_ip: ${{ steps.terraform-output.outputs.control_plane_ip }}
+
+    defaults:
+      run:
+        working-directory: infra/tf
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Select or create Terraform workspace
+        run: terraform workspace select -or-create "${{ inputs.region }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file="tfvars/${{ inputs.region }}.tfvars"
+
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -var-file="tfvars/${{ inputs.region }}.tfvars" \
+            -auto-approve
+
+      - name: Get Control Plane IP
+        id: terraform-output
+        run: |
+          CONTROL_PLANE_IP=$(terraform output -raw control_plane_public_ip)
+          echo "control_plane_ip=$CONTROL_PLANE_IP" >> "$GITHUB_OUTPUT"
+
+  bootstrap:
+    name: Bootstrap Kubernetes Cluster
+    runs-on: ubuntu-latest
+    needs: terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Copy bootstrap script
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "scripts/bootstrap.sh"
+          target: "/home/ubuntu"
+          strip_components: 1
+
+      - name: Copy App of Apps
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "infra/argocd/app-of-apps.yaml"
+          target: "/home/ubuntu"
+          strip_components: 2
+
+      - name: Run bootstrap
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            chmod +x /home/ubuntu/bootstrap.sh
+            sudo /home/ubuntu/bootstrap.sh

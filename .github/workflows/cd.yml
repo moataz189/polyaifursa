@@ -1,0 +1,204 @@
+name: Deploy Services
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "services/**"
+      - ".github/workflows/cd.yml"
+
+permissions:
+  contents: write
+
+
+concurrency:
+  group: deploy-services-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  
+  detect:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      agent: ${{ steps.filter.outputs.agent }}
+      yolo: ${{ steps.filter.outputs.yolo }}
+      mcp: ${{ steps.filter.outputs.mcp }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - "services/frontend/**"
+
+            agent:
+              - "services/agent/**"
+
+            yolo:
+              - "services/yolo/**"
+
+            mcp:
+              - "services/img-proc-mcp/**"
+
+
+  build:
+    name: Build ${{ matrix.service }}
+    needs: detect
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: frontend
+            changed: ${{ needs.detect.outputs.frontend }}
+            context: services/frontend
+            image: moataz189/frontend-service
+
+          - service: agent
+            changed: ${{ needs.detect.outputs.agent }}
+            context: services/agent
+            image: moataz189/agent-service
+
+          - service: yolo
+            changed: ${{ needs.detect.outputs.yolo }}
+            context: services/yolo
+            image: moataz189/yolo-service
+
+          - service: img-proc-mcp
+            changed: ${{ needs.detect.outputs.mcp }}
+            context: services/img-proc-mcp
+            image: moataz189/img-proc-mcp
+
+    steps:
+      - name: Checkout repository
+        if: matrix.changed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        if: matrix.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        if: matrix.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          platforms: linux/amd64
+          tags: ${{ matrix.image }}:${{ github.sha }}
+
+ 
+  update-manifests:
+    name: Update Kubernetes manifests
+    needs:
+      - detect
+      - build
+
+    if: |
+      needs.detect.outputs.frontend == 'true' ||
+      needs.detect.outputs.agent == 'true' ||
+      needs.detect.outputs.yolo == 'true' ||
+      needs.detect.outputs.mcp == 'true'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Select environment directory
+        run: |
+          if [ "${{ github.ref_name }}" = "dev" ]; then
+            echo "ENV_DIR=dev" >> "$GITHUB_ENV"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            echo "ENV_DIR=prod" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+      - name: Update frontend image
+        if: needs.detect.outputs.frontend == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/frontend/frontend-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/frontend-service:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/frontend-service:${GITHUB_SHA}" "$FILE"
+
+      - name: Update agent image
+        if: needs.detect.outputs.agent == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/agent/agent-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/agent-service:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/agent-service:${GITHUB_SHA}" "$FILE"
+
+      - name: Update YOLO image
+        if: needs.detect.outputs.yolo == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/yolo/yolo-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/yolo-service:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/yolo-service:${GITHUB_SHA}" "$FILE"
+
+      - name: Update MCP image
+        if: needs.detect.outputs.mcp == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/img-proc-mcp/img-proc-mcp-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/img-proc-mcp:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/img-proc-mcp:${GITHUB_SHA}" "$FILE"
+
+      - name: Commit and push manifest changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "infra/k8s/${ENV_DIR}"
+
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit."
+            exit 0
+          fi
+
+          git commit -m "deploy: update service images to ${GITHUB_SHA}"
+          git push origin "${{ github.ref_name }}"
