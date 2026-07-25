@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: yolo
+  namespace: prod
+  labels:
+    app: yolo
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: yolo
+
+  template:
+    metadata:
+      labels:
+        app: yolo
+
+    spec:
+      containers:
+        - name: yolo
+          image: moataz189/yolo-service:0.0.13
+
+          ports:
+            - containerPort: 8080
+
+          env:
+            - name: AWS_REGION
+              value: "us-east-1"
+
+            - name: AWS_S3_BUCKET
+              value: "moataz-polyai-images"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

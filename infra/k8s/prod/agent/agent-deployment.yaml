@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: agent
+  namespace: prod
+  labels:
+    app: agent
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: agent
+
+  template:
+    metadata:
+      labels:
+        app: agent
+
+    spec:
+      containers:
+        - name: agent
+          image: moataz189/agent-service:0.0.14
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            - name: YOLO_SERVICE_URL
+              value: "http://yolo-svc:8080"
+
+            - name: IMG_PROC_MCP_URL
+              value: "http://img-proc-mcp-svc:9000/mcp"
+
+            - name: AWS_REGION
+              value: "us-east-1"
+
+            - name: AWS_S3_BUCKET
+              value: "moataz-polyai-images"
+
+            - name: MODEL_PROVIDER
+              value: "bedrock_converse"
+
+            - name: MODEL
+              value: "openai.gpt-oss-20b-1:0"
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

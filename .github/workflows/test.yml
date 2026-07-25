@@ -74,6 +74,8 @@ jobs:
             context: services/agent
           - name: frontend-service
             context: services/frontend
+          - name: img-proc-mcp-service
+            context: services/img-proc-mcp
 
     steps:
       - name: Checkout code
