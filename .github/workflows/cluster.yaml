@@ -93,8 +93,6 @@ jobs:
 
       - name: Run bootstrap
         uses: appleboy/ssh-action@v1
-        env:
-          GIT_REPO_URL: https://github.com/moataz189/polyaifursa.git
         with:
           host: ${{ needs.terraform.outputs.control_plane_ip }}
           username: ubuntu
