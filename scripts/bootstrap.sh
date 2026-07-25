@@ -5,7 +5,7 @@ export KUBECONFIG=/etc/kubernetes/admin.conf
 
 CALICO_VERSION="v3.32.1"
 ARGOCD_NAMESPACE="argocd"
-GIT_REPO_URL="${GIT_REPO_URL:?GIT_REPO_URL is required}"
+GIT_REPO_URL=https://github.com/moataz189/polyaifursa.git
 
 echo "======================================"
 echo "Starting Kubernetes bootstrap..."
