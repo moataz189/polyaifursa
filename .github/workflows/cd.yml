@@ -11,14 +11,13 @@ on:
 
 permissions:
   contents: write
-
+  pull-requests: write
 
 concurrency:
   group: deploy-services-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  
   detect:
     name: Detect changed services
     runs-on: ubuntu-latest
@@ -51,7 +50,6 @@ jobs:
 
             mcp:
               - "services/img-proc-mcp/**"
-
 
   build:
     name: Build ${{ matrix.service }}
@@ -103,7 +101,6 @@ jobs:
           platforms: linux/amd64
           tags: ${{ matrix.image }}:${{ github.sha }}
 
- 
   update-manifests:
     name: Update Kubernetes manifests
     needs:
@@ -188,17 +185,53 @@ jobs:
 
           grep "image:.*moataz189/img-proc-mcp:${GITHUB_SHA}" "$FILE"
 
-      - name: Commit and push manifest changes
+      # DEV: commit and push directly to dev
+      - name: Commit and push dev manifest changes
+        if: github.ref_name == 'dev'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add "infra/k8s/${ENV_DIR}"
+          git add "infra/k8s/dev"
 
           if git diff --cached --quiet; then
-            echo "No manifest changes to commit."
+            echo "No dev manifest changes to commit."
             exit 0
           fi
 
-          git commit -m "deploy: update service images to ${GITHUB_SHA}"
-          git push origin "${{ github.ref_name }}"
+          git commit -m "deploy(dev): update service images to ${GITHUB_SHA}"
+          git push origin dev
+
+      # PROD: create a Pull Request instead of pushing directly to main
+      - name: Create production manifest Pull Request
+        if: github.ref_name == 'main'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.CD_PAT }}
+          base: main
+          branch: deploy/update-prod-manifests
+          delete-branch: true
+
+          commit-message: "deploy(prod): update service images to ${{ github.sha }}"
+          title: "Deploy production images from ${{ github.sha }}"
+
+          body: |
+            This Pull Request was created automatically by the CD workflow.
+
+            It updates the production Kubernetes manifests to use Docker images
+            built from commit:
+
+            `${{ github.sha }}`
+
+            Changed services:
+
+            - Frontend: `${{ needs.detect.outputs.frontend }}`
+            - Agent: `${{ needs.detect.outputs.agent }}`
+            - YOLO: `${{ needs.detect.outputs.yolo }}`
+            - Image Processing MCP: `${{ needs.detect.outputs.mcp }}`
+
+            After this Pull Request is merged, production can be synchronized
+            manually through ArgoCD.
+
+          add-paths: |
+            infra/k8s/prod/**
