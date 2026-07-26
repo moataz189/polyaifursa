@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: agent
-          image: moataz189/agent-service:dd441f7b5188f5121a8600c1693c836f03162d35
+          image: moataz189/agent-service:0ca0a90b7db40bec72abe66a766ef100d418c744
 
           ports:
             - containerPort: 8000
