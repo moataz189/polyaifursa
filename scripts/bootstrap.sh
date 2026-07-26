@@ -37,7 +37,20 @@ echo "Installing Metrics Server..."
 kubectl apply -f \
 https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
+
+echo "Patching Metrics Server..."
+kubectl patch deployment metrics-server -n kube-system \
+  --type='json' \
+  -p='[
+    {
+      "op":"add",
+      "path":"/spec/template/spec/containers/0/args/-",
+      "value":"--kubelet-insecure-tls"
+    }
+  ]'
+
 echo "Waiting for Metrics Server..."
+
 
 kubectl rollout status \
 deployment/metrics-server \
@@ -89,25 +102,24 @@ kubectl create namespace "${ARGOCD_NAMESPACE}" \
 
 echo "Installing ArgoCD..."
 
-kubectl apply \
-  -n "${ARGOCD_NAMESPACE}" \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 echo "Waiting for ArgoCD components..."
 
 kubectl rollout status \
 deployment/argocd-server \
--n "${ARGOCD_NAMESPACE}" \
+--namespace argocd \
 --timeout=10m
 
 kubectl rollout status \
 deployment/argocd-repo-server \
--n "${ARGOCD_NAMESPACE}" \
+--namespace argocd \
 --timeout=10m
 
 kubectl rollout status \
 deployment/argocd-applicationset-controller \
--n "${ARGOCD_NAMESPACE}" \
+--namespace argocd \
 --timeout=10m
 
 #################################################
