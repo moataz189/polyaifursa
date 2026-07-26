@@ -10,8 +10,7 @@ on:
       - ".github/workflows/cd.yml"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: deploy-services-${{ github.ref }}
@@ -58,6 +57,7 @@ jobs:
 
     strategy:
       fail-fast: false
+
       matrix:
         include:
           - service: frontend
@@ -121,6 +121,16 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Configure SSH remote
+        run: |
+          git remote set-url origin git@github.com:moataz189/polyaifursa.git
 
       - name: Select environment directory
         run: |
@@ -185,12 +195,12 @@ jobs:
 
           grep "image:.*moataz189/img-proc-mcp:${GITHUB_SHA}" "$FILE"
 
-      # DEV: commit and push directly to dev
       - name: Commit and push dev manifest changes
         if: github.ref_name == 'dev'
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add "infra/k8s/dev"
 
@@ -199,39 +209,26 @@ jobs:
             exit 0
           fi
 
-          git commit -m "deploy(dev): update service images to ${GITHUB_SHA}"
-          git push origin dev
+          git commit \
+            -m "deploy(dev): update service images to ${GITHUB_SHA}"
 
-      # PROD: create a Pull Request instead of pushing directly to main
-      - name: Create production manifest Pull Request
+          git push origin HEAD:dev
+
+      - name: Commit and push production manifest changes
         if: github.ref_name == 'main'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.CD_PAT }}
-          base: main
-          branch: deploy/update-prod-manifests
-          delete-branch: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
-          commit-message: "deploy(prod): update service images to ${{ github.sha }}"
-          title: "Deploy production images from ${{ github.sha }}"
+          git add "infra/k8s/prod"
 
-          body: |
-            This Pull Request was created automatically by the CD workflow.
+          if git diff --cached --quiet; then
+            echo "No production manifest changes to commit."
+            exit 0
+          fi
 
-            It updates the production Kubernetes manifests to use Docker images
-            built from commit:
+          git commit \
+            -m "deploy(prod): update service images to ${GITHUB_SHA}"
 
-            `${{ github.sha }}`
-
-            Changed services:
-
-            - Frontend: `${{ needs.detect.outputs.frontend }}`
-            - Agent: `${{ needs.detect.outputs.agent }}`
-            - YOLO: `${{ needs.detect.outputs.yolo }}`
-            - Image Processing MCP: `${{ needs.detect.outputs.mcp }}`
-
-            After this Pull Request is merged, production can be synchronized
-            manually through ArgoCD.
-
-          add-paths: |
-            infra/k8s/prod/**
+          git push origin HEAD:main
