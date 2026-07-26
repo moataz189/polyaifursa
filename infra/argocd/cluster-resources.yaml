@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-resources
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/moataz189/polyaifursa.git
+    targetRevision: main
+    path: infra/k8s/common
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+    syncOptions:
+      - CreateNamespace=true
