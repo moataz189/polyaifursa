@@ -862,10 +862,24 @@ def chat(request: ChatRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+from fastapi import HTTPException
+import httpx
 
+@app.get("/ready")
+async def ready():
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.get(f"{YOLO_SERVICE_URL}/health")
+            response.raise_for_status()
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="YOLO service is unavailable",
+        )
+
+    return {"status": "ready"}
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
-#test
