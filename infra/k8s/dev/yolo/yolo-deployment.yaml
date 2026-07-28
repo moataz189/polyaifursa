@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: yolo
-          image: moataz189/yolo-service:5de279fef6827dbe4873020cf3da175d41be45a5
+          image: moataz189/yolo-service:67afe7d565a539bbd34ddae31460084f33891115
 
           ports:
             - containerPort: 8080
