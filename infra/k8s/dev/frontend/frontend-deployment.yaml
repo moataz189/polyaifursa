@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: moataz189/frontend-service:0ca0a90b7db40bec72abe66a766ef100d418c744
+          image: moataz189/frontend-service:40137e37cfb1d77dfbec3641f6621de6dbd46038
 
           ports:
             - containerPort: 3000
