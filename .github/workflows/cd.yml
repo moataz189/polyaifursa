@@ -31,12 +31,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Detect changes
+      - name: Detect changes in current push
         id: filter
         uses: dorny/paths-filter@v3
         with:
+          base: ${{ github.event.before }}
+          ref: ${{ github.sha }}
           filters: |
             frontend:
               - "services/frontend/**"
@@ -50,6 +52,16 @@ jobs:
             mcp:
               - "services/img-proc-mcp/**"
 
+      - name: Show detected changes
+        run: |
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Previous commit: ${{ github.event.before }}"
+          echo "Current commit: ${{ github.sha }}"
+          echo "Frontend changed: ${{ steps.filter.outputs.frontend }}"
+          echo "Agent changed: ${{ steps.filter.outputs.agent }}"
+          echo "YOLO changed: ${{ steps.filter.outputs.yolo }}"
+          echo "MCP changed: ${{ steps.filter.outputs.mcp }}"
+
   build:
     name: Build ${{ matrix.service }}
     needs: detect
@@ -57,7 +69,6 @@ jobs:
 
     strategy:
       fail-fast: false
-
       matrix:
         include:
           - service: frontend
@@ -100,6 +111,11 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ matrix.image }}:${{ github.sha }}
+
+      - name: Skip unchanged service
+        if: matrix.changed != 'true'
+        run: |
+          echo "${{ matrix.service }} was not changed. Skipping image build."
 
   update-manifests:
     name: Update Kubernetes manifests
