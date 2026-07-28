@@ -2,5 +2,4 @@ mcp>=1.2.0
 uvicorn
 Pillow
 boto3
-mcp
 pytest>=7.0.0
