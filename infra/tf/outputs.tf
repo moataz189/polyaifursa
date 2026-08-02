@@ -93,3 +93,17 @@ output "k8s_ami_name" {
   description = "AMI name selected for Kubernetes nodes"
   value       = data.aws_ami.k8s_node.name
 }
+
+# ==========================================
+# Ingress / ALB
+# ==========================================
+
+output "alb_dns_name" {
+  description = "DNS name of the ingress ALB"
+  value       = module.ingress.alb_dns_name
+}
+
+output "ingress_hostnames" {
+  description = "Public hostnames routed through the ALB"
+  value       = module.ingress.hostnames
+}

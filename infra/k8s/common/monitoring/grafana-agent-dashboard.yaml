@@ -2,8 +2,11 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-agent-dashboard
-  namespace: dev
-
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Agent"
 data:
   agent.json: |
     {
@@ -32,7 +35,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "ffs4eqo9ka51cb"
           },
           "fieldConfig": {
             "defaults": {
@@ -114,7 +117,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "100 *\nsum(rate(agent_chat_requests_total{status=\"error\"}[5m]))\n/\nclamp_min(\n  sum(rate(agent_chat_requests_total[5m])),\n  0.000001\n)",
+              "expr": "100 *\nsum(rate(agent_chat_requests_total{status=\"error\", namespace=~\"$namespace\"}[5m]))\n/\nclamp_min(\n  sum(rate(agent_chat_requests_total{namespace=~\"$namespace\"}[5m])),\n  0.000001\n)",
               "legendFormat": "__auto",
               "range": true,
               "refId": "A"
@@ -126,7 +129,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "ffs4eqo9ka51cb"
           },
           "fieldConfig": {
             "defaults": {
@@ -208,7 +211,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "histogram_quantile(\n  0.50,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket[5m])\n  )\n)",
+              "expr": "histogram_quantile(\n  0.50,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
               "legendFormat": "p50",
               "range": true,
               "refId": "A"
@@ -216,10 +219,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "ffs4eqo9ka51cb"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(\n  0.95,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket[5m])\n  )\n)",
+              "expr": "histogram_quantile(\n  0.95,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
               "hide": false,
               "instant": false,
               "legendFormat": "p95",
@@ -229,13 +232,13 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "ffs4eqo9ka51cb"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(\n  0.99,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket[5m])\n  )\n)",
+              "expr": "histogram_quantile(\n  0.99,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
               "hide": false,
               "instant": false,
-              "legendFormat": "p99",
+              "legendFormat": "p95",
               "range": true,
               "refId": "C"
             }
@@ -246,7 +249,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "ffs4eqo9ka51cb"
           },
           "fieldConfig": {
             "defaults": {
@@ -327,7 +330,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "sum by (status) (\n  increase(agent_chat_requests_total[1m])\n)",
+              "expr": "sum by (status) (\n  increase(agent_chat_requests_total{namespace=~\"$namespace\"}[1m])\n)",
               "legendFormat": "{{status}}",
               "range": true,
               "refId": "A"
@@ -339,7 +342,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "ffs4eqo9ka51cb"
           },
           "fieldConfig": {
             "defaults": {
@@ -421,10 +424,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "ffs4eqo9ka51cb"
               },
               "editorMode": "code",
-              "expr": "increase(agent_input_tokens_total[1m])",
+              "expr": "increase(agent_input_tokens_total{namespace=~\"$namespace\"}[1m])",
               "legendFormat": "input",
               "range": true,
               "refId": "A"
@@ -432,10 +435,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "ffs4eqo9ka51cb"
               },
               "editorMode": "code",
-              "expr": "increase(agent_output_tokens_total[1m])",
+              "expr": "increase(agent_output_tokens_total{namespace=~\"$namespace\"}[1m])",
               "hide": false,
               "instant": false,
               "legendFormat": "Output",
@@ -451,7 +454,30 @@ data:
       "schemaVersion": 41,
       "tags": [],
       "templating": {
-        "list": []
+        "list": [
+          {
+            "current": {
+              "text": "All",
+              "value": "$__all"
+            },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "ffs4eqo9ka51cb"
+            },
+            "includeAll": true,
+            "label": "Namespace",
+            "multi": true,
+            "name": "namespace",
+            "options": [],
+            "query": {
+              "query": "label_values(agent_chat_requests_total, namespace)",
+              "refId": "PrometheusVariableQueryEditor-VariableQuery"
+            },
+            "refresh": 2,
+            "regex": "",
+            "type": "query"
+          }
+        ]
       },
       "time": {
         "from": "2026-07-14T16:02:06.842Z",

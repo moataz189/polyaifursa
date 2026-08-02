@@ -44,3 +44,8 @@ output "worker_public_ips" {
   description = "Public IP addresses of Kubernetes workers"
   value       = data.aws_instances.workers.public_ips
 }
+
+output "worker_security_group_id" {
+  description = "ID of the worker nodes security group"
+  value       = aws_security_group.workers.id
+}

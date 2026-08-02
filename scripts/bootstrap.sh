@@ -15,18 +15,26 @@ echo "======================================"
 # Calico
 #################################################
 
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+echo "Waiting for Kubernetes API server..."
+
+for attempt in $(seq 1 30); do
+  if kubectl get --raw='/readyz' >/dev/null 2>&1; then
+    echo "Kubernetes API server is ready."
+    break
+  fi
+
+  echo "API server not ready yet: $attempt/30"
+  sleep 10
+done
+
+kubectl get --raw='/readyz'
+
 echo "Installing Calico..."
 
-kubectl apply -f \
-"https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
-
-echo "Waiting for nodes to become Ready..."
-
-kubectl wait \
-  --for=condition=Ready \
-  nodes \
-  --all \
-  --timeout=10m
+kubectl apply --validate=false \
+  -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
 
 #################################################
 # Metrics Server
@@ -119,6 +127,24 @@ deployment/argocd-repo-server \
 
 kubectl rollout status \
 deployment/argocd-applicationset-controller \
+--namespace argocd \
+--timeout=10m
+
+#################################################
+# ArgoCD insecure mode (required for plain-HTTP ingress)
+#################################################
+
+echo "Configuring ArgoCD server for insecure (HTTP) mode behind ingress-nginx..."
+
+kubectl patch configmap argocd-cmd-params-cm \
+  --namespace argocd \
+  --type merge \
+  -p '{"data":{"server.insecure":"true"}}'
+
+kubectl rollout restart deployment/argocd-server --namespace argocd
+
+kubectl rollout status \
+deployment/argocd-server \
 --namespace argocd \
 --timeout=10m
 

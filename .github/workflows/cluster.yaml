@@ -71,6 +71,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Wait for SSH
+        run: |
+          IP="${{ needs.terraform.outputs.control_plane_ip }}"
+
+          echo "Waiting for SSH on $IP..."
+
+          for i in {1..30}; do
+            if nc -z -w 5 "$IP" 22; then
+              echo "SSH is ready."
+              exit 0
+            fi
+
+            echo "Attempt $i/30..."
+            sleep 10
+          done
+
+          echo "SSH did not become available."
+          exit 1
+
       - name: Copy bootstrap script
         uses: appleboy/scp-action@v0.1.7
         with:

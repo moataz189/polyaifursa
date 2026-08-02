@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: img-proc-mcp
-          image: moataz189/img-proc-mcp:bd585ff775cc135901d824563d413c1c3e22d3b4
+          image: moataz189/img-proc-mcp:962723f552b3cd81b5a43f46e3f7de025b34f905
 
           ports:
             - containerPort: 9000
