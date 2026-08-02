@@ -3,9 +3,12 @@ kind: Service
 metadata:
   name: yolo-svc
   namespace: prod
+  labels:
+    app: yolo
 spec:
   selector:
     app: yolo
   ports:
-    - port: 8080
+    - name: http
+      port: 8080
       targetPort: 8080
