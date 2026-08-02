@@ -3,6 +3,13 @@ data "aws_route53_zone" "this" {
   private_zone = false
 }
 
+locals {
+  # AWS caps ALB and Target Group names at 32 characters, which project_name
+  # alone can already approach. Derive a short, deterministic prefix instead
+  # of concatenating the full project_name onto these two resources.
+  short_name_prefix = substr(var.project_name, 0, min(20, length(var.project_name)))
+}
+
 # =========================================================
 # ALB Security Group
 # =========================================================
@@ -89,7 +96,7 @@ resource "aws_acm_certificate_validation" "this" {
 # =========================================================
 
 resource "aws_lb" "this" {
-  name               = "${var.project_name}-alb"
+  name               = "${local.short_name_prefix}-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
@@ -101,7 +108,7 @@ resource "aws_lb" "this" {
 }
 
 resource "aws_lb_target_group" "http_node_port" {
-  name        = "${var.project_name}-ingress-tg"
+  name        = "${local.short_name_prefix}-ingress-tg"
   port        = var.worker_http_node_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
