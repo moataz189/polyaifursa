@@ -75,6 +75,7 @@ jobs:
             changed: ${{ needs.detect.outputs.frontend }}
             context: services/frontend
             image: moataz189/frontend-service
+            build-args: NEXT_PUBLIC_AGENT_URL=/api
 
           - service: agent
             changed: ${{ needs.detect.outputs.agent }}
@@ -111,6 +112,7 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ matrix.image }}:${{ github.sha }}
+          build-args: ${{ matrix.build-args }}
 
       - name: Skip unchanged service
         if: matrix.changed != 'true'
