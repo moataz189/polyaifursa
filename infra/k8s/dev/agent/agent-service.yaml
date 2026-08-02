@@ -4,6 +4,8 @@ kind: Service
 metadata:
   name: agent-svc
   namespace: dev
+  labels:
+    app: agent
 
 spec:
   type: ClusterIP
@@ -12,6 +14,7 @@ spec:
     app: agent
 
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 8000
       targetPort: 8000
