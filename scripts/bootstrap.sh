@@ -131,6 +131,24 @@ deployment/argocd-applicationset-controller \
 --timeout=10m
 
 #################################################
+# ArgoCD insecure mode (required for plain-HTTP ingress)
+#################################################
+
+echo "Configuring ArgoCD server for insecure (HTTP) mode behind ingress-nginx..."
+
+kubectl patch configmap argocd-cmd-params-cm \
+  --namespace argocd \
+  --type merge \
+  -p '{"data":{"server.insecure":"true"}}'
+
+kubectl rollout restart deployment/argocd-server --namespace argocd
+
+kubectl rollout status \
+deployment/argocd-server \
+--namespace argocd \
+--timeout=10m
+
+#################################################
 # App of Apps
 #################################################
 
