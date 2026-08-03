@@ -35,7 +35,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "ffs4eqo9ka51cb"
+            "uid": "prometheus"
           },
           "fieldConfig": {
             "defaults": {
@@ -129,7 +129,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "ffs4eqo9ka51cb"
+            "uid": "prometheus"
           },
           "fieldConfig": {
             "defaults": {
@@ -219,7 +219,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "ffs4eqo9ka51cb"
+                "uid": "prometheus"
               },
               "editorMode": "code",
               "expr": "histogram_quantile(\n  0.95,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
@@ -232,7 +232,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "ffs4eqo9ka51cb"
+                "uid": "prometheus"
               },
               "editorMode": "code",
               "expr": "histogram_quantile(\n  0.99,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
@@ -249,7 +249,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "ffs4eqo9ka51cb"
+            "uid": "prometheus"
           },
           "fieldConfig": {
             "defaults": {
@@ -342,7 +342,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "ffs4eqo9ka51cb"
+            "uid": "prometheus"
           },
           "fieldConfig": {
             "defaults": {
@@ -424,7 +424,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "ffs4eqo9ka51cb"
+                "uid": "prometheus"
               },
               "editorMode": "code",
               "expr": "increase(agent_input_tokens_total{namespace=~\"$namespace\"}[1m])",
@@ -435,7 +435,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "ffs4eqo9ka51cb"
+                "uid": "prometheus"
               },
               "editorMode": "code",
               "expr": "increase(agent_output_tokens_total{namespace=~\"$namespace\"}[1m])",
@@ -462,7 +462,7 @@ data:
             },
             "datasource": {
               "type": "prometheus",
-              "uid": "ffs4eqo9ka51cb"
+              "uid": "prometheus"
             },
             "includeAll": true,
             "label": "Namespace",
