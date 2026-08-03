@@ -23,6 +23,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -705,6 +706,29 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+# Custom business metrics backing the Agent Observability Grafana dashboard
+# (infra/k8s/common/monitoring/grafana-agent-dashboard.yaml). Scraped via the
+# agent ServiceMonitor at /metrics; the "namespace" label used to distinguish
+# dev/prod in that dashboard is attached automatically by the Prometheus
+# Operator based on the scrape target's namespace, not by this code.
+AGENT_CHAT_REQUESTS_TOTAL = Counter(
+    "agent_chat_requests_total",
+    "Total number of /chat requests, by outcome.",
+    ["status"],
+)
+AGENT_CHAT_REQUEST_DURATION_SECONDS = Histogram(
+    "agent_chat_request_duration_seconds",
+    "Duration of /chat requests in seconds.",
+)
+AGENT_INPUT_TOKENS_TOTAL = Counter(
+    "agent_input_tokens_total",
+    "Total number of LLM input tokens consumed across /chat requests.",
+)
+AGENT_OUTPUT_TOKENS_TOTAL = Counter(
+    "agent_output_tokens_total",
+    "Total number of LLM output tokens produced across /chat requests.",
+)
+
 
 class ChatMessage(BaseModel):
     role: str                           # "user" or "assistant"
@@ -827,7 +851,7 @@ def chat(request: ChatRequest):
     token_processed = _latest_processed_key.set(None)
     token_prediction = _latest_prediction_uid.set(current_prediction_id)
 
-
+    start_time = time.perf_counter()
     try:
         result = run_agent(lc_messages)
         # Remember this conversation's image flow on the backend, keyed by
@@ -839,6 +863,9 @@ def chat(request: ChatRequest):
             "original_image_s3_key": result["original_image_s3_key"],
             "latest_prediction_id": result["prediction_id"],
         }
+        AGENT_CHAT_REQUESTS_TOTAL.labels(status="success").inc()
+        AGENT_INPUT_TOKENS_TOTAL.inc(result["tokens_used"]["input"])
+        AGENT_OUTPUT_TOKENS_TOTAL.inc(result["tokens_used"]["output"])
         return ChatResponse(
             response=result["response"],
             prediction_id=result["prediction_id"],
@@ -851,17 +878,26 @@ def chat(request: ChatRequest):
             tokens_used=TokensUsed(**result["tokens_used"]),
             image_url=result["image_url"],
         )
+    except Exception:
+        AGENT_CHAT_REQUESTS_TOTAL.labels(status="error").inc()
+        raise
     finally:
+        AGENT_CHAT_REQUEST_DURATION_SECONDS.observe(time.perf_counter() - start_time)
         _current_image_s3_key.reset(token_image)
         _current_image_id.reset(token_image_id)
         _original_image_s3_key.reset(token_original)
         _latest_processed_key.reset(token_processed)
         _latest_prediction_uid.reset(token_prediction)
-        
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 from fastapi import HTTPException
 import httpx
 
