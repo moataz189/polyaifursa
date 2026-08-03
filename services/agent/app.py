@@ -23,7 +23,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -32,6 +32,12 @@ from PIL import Image
 from pydantic import BaseModel
 
 from mcp_client import get_mcp_tools
+from metrics import (
+    AGENT_CHAT_REQUEST_DURATION_SECONDS,
+    AGENT_CHAT_REQUESTS_TOTAL,
+    AGENT_INPUT_TOKENS_TOTAL,
+    AGENT_OUTPUT_TOKENS_TOTAL,
+)
 from s3 import build_object_key, download_image, safe_image_name, upload_image
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
@@ -704,29 +710,6 @@ app.add_middleware(
     ],
     allow_methods=["POST", "GET"],
     allow_headers=["Content-Type"],
-)
-
-# Custom business metrics backing the Agent Observability Grafana dashboard
-# (infra/k8s/common/monitoring/grafana-agent-dashboard.yaml). Scraped via the
-# agent ServiceMonitor at /metrics; the "namespace" label used to distinguish
-# dev/prod in that dashboard is attached automatically by the Prometheus
-# Operator based on the scrape target's namespace, not by this code.
-AGENT_CHAT_REQUESTS_TOTAL = Counter(
-    "agent_chat_requests_total",
-    "Total number of /chat requests, by outcome.",
-    ["status"],
-)
-AGENT_CHAT_REQUEST_DURATION_SECONDS = Histogram(
-    "agent_chat_request_duration_seconds",
-    "Duration of /chat requests in seconds.",
-)
-AGENT_INPUT_TOKENS_TOTAL = Counter(
-    "agent_input_tokens_total",
-    "Total number of LLM input tokens consumed across /chat requests.",
-)
-AGENT_OUTPUT_TOKENS_TOTAL = Counter(
-    "agent_output_tokens_total",
-    "Total number of LLM output tokens produced across /chat requests.",
 )
 
 
