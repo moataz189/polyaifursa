@@ -44,3 +44,19 @@ variable "region" {
   description = "AWS region in which the cluster is deployed"
   type        = string
 }
+variable "s3_bucket_name" {
+  description = "Name of the existing (externally managed) S3 bucket the agent/yolo/img-proc-mcp services read and write images to"
+  type        = string
+}
+variable "bedrock_model_ids" {
+  description = "Bedrock foundation model IDs the agent service is allowed to invoke. Must match services/agent/app.py's ALLOWED_MODELS set."
+  type        = list(string)
+  default = [
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "amazon.nova-micro-v1:0",
+    "amazon.nova-lite-v1:0",
+    "openai.gpt-oss-20b-1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "mistral.mistral-7b-instruct-v0:2",
+  ]
+}

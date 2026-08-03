@@ -9,3 +9,4 @@ worker_max_size         = 3
 worker_desired_capacity = 1
 
 route53_zone_name = "fursa.click"
+s3_bucket_name    = "moataz-polyai-images"

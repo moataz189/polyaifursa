@@ -43,3 +43,8 @@ variable "route53_zone_name" {
   description = "Name of the existing Route53 hosted zone used for public DNS records"
   type        = string
 }
+
+variable "s3_bucket_name" {
+  description = "Name of the existing (externally managed) S3 bucket used for image storage"
+  type        = string
+}
