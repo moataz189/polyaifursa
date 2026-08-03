@@ -7,3 +7,5 @@ key_name = "moataz-key"
 worker_min_size         = 1
 worker_max_size         = 3
 worker_desired_capacity = 1
+
+route53_zone_name = "fursa.click"

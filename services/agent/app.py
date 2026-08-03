@@ -23,6 +23,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -31,6 +32,12 @@ from PIL import Image
 from pydantic import BaseModel
 
 from mcp_client import get_mcp_tools
+from metrics import (
+    AGENT_CHAT_REQUEST_DURATION_SECONDS,
+    AGENT_CHAT_REQUESTS_TOTAL,
+    AGENT_INPUT_TOKENS_TOTAL,
+    AGENT_OUTPUT_TOKENS_TOTAL,
+)
 from s3 import build_object_key, download_image, safe_image_name, upload_image
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
@@ -827,7 +834,7 @@ def chat(request: ChatRequest):
     token_processed = _latest_processed_key.set(None)
     token_prediction = _latest_prediction_uid.set(current_prediction_id)
 
-
+    start_time = time.perf_counter()
     try:
         result = run_agent(lc_messages)
         # Remember this conversation's image flow on the backend, keyed by
@@ -839,6 +846,9 @@ def chat(request: ChatRequest):
             "original_image_s3_key": result["original_image_s3_key"],
             "latest_prediction_id": result["prediction_id"],
         }
+        AGENT_CHAT_REQUESTS_TOTAL.labels(status="success").inc()
+        AGENT_INPUT_TOKENS_TOTAL.inc(result["tokens_used"]["input"])
+        AGENT_OUTPUT_TOKENS_TOTAL.inc(result["tokens_used"]["output"])
         return ChatResponse(
             response=result["response"],
             prediction_id=result["prediction_id"],
@@ -851,17 +861,26 @@ def chat(request: ChatRequest):
             tokens_used=TokensUsed(**result["tokens_used"]),
             image_url=result["image_url"],
         )
+    except Exception:
+        AGENT_CHAT_REQUESTS_TOTAL.labels(status="error").inc()
+        raise
     finally:
+        AGENT_CHAT_REQUEST_DURATION_SECONDS.observe(time.perf_counter() - start_time)
         _current_image_s3_key.reset(token_image)
         _current_image_id.reset(token_image_id)
         _original_image_s3_key.reset(token_original)
         _latest_processed_key.reset(token_processed)
         _latest_prediction_uid.reset(token_prediction)
-        
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 from fastapi import HTTPException
 import httpx
 

@@ -1,0 +1,8 @@
+controller:
+  kind: DaemonSet
+  service:
+    type: NodePort
+    externalTrafficPolicy: Local
+    nodePorts:
+      http: 30080
+      https: 30443

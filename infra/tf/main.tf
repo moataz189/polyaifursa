@@ -93,3 +93,25 @@ module "k8s_cluster" {
   worker_desired_capacity = var.worker_desired_capacity
   region                  = var.region
 }
+
+locals {
+  ingress_hostnames = [
+    "moataz-dev.fursa.click",
+    "moataz-prod.fursa.click",
+    "moataz-grafana.fursa.click",
+    "moataz-prometheus.fursa.click",
+    "moataz-argocd.fursa.click",
+  ]
+}
+
+module "ingress" {
+  source = "./modules/ingress"
+
+  project_name             = var.project_name
+  vpc_id                   = module.vpc.vpc_id
+  public_subnet_ids        = module.vpc.public_subnets
+  worker_asg_name          = module.k8s_cluster.worker_asg_name
+  worker_security_group_id = module.k8s_cluster.worker_security_group_id
+  route53_zone_name        = var.route53_zone_name
+  hostnames                = local.ingress_hostnames
+}
