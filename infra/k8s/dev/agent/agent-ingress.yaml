@@ -6,6 +6,11 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "true"
     nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # ingress-nginx defaults proxy-body-size to 1m; /chat accepts a
+    # base64-encoded image (ChatMessage.image_base64), which inflates a
+    # multi-MB photo well past that default and gets rejected with 413
+    # before ever reaching the agent pod.
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
 spec:
   ingressClassName: nginx
   rules:
