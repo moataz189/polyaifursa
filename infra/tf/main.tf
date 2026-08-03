@@ -92,6 +92,7 @@ module "k8s_cluster" {
   worker_max_size         = var.worker_max_size
   worker_desired_capacity = var.worker_desired_capacity
   region                  = var.region
+  s3_bucket_name          = var.s3_bucket_name
 }
 
 locals {

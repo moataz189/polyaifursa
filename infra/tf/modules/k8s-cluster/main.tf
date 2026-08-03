@@ -2,6 +2,13 @@ data "aws_caller_identity" "current" {}
 
 data "aws_partition" "current" {}
 
+# Existing, externally managed image storage bucket (not created/managed by
+# this stack), looked up by name -- same pattern as the fursa.click Route53
+# zone lookup in modules/ingress.
+data "aws_s3_bucket" "images" {
+  bucket = var.s3_bucket_name
+}
+
 
 # =========================================================
 # Security Groups
@@ -240,6 +247,76 @@ resource "aws_iam_role_policy" "worker_ssm" {
   })
 }
 
+
+
+# Agent/YOLO/img-proc-mcp only ever call GetObject and PutObject against this
+# bucket (confirmed by inspecting every services/*/s3.py) -- no DeleteObject,
+# no code-level listing. Object keys are dynamically namespaced per
+# chat/image (<chat_id>/<image_id>/{original,processed,predictions/<uid>}/...),
+# not a small fixed set of prefixes, so there is no meaningful prefix to
+# further restrict object actions to.
+resource "aws_iam_role_policy" "worker_s3_images" {
+  name = "${var.project_name}-worker-s3-images-policy"
+  role = aws_iam_role.worker.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "ListImagesBucket"
+        Effect = "Allow"
+
+        Action = [
+          "s3:ListBucket"
+        ]
+
+        Resource = data.aws_s3_bucket.images.arn
+      },
+      {
+        Sid    = "ReadWriteImageObjects"
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+
+        Resource = "${data.aws_s3_bucket.images.arn}/*"
+      }
+    ]
+  })
+}
+
+# Scoped to exactly the models services/agent/app.py's ALLOWED_MODELS permits
+# (checked at import time) rather than a blanket foundation-model/* wildcard --
+# narrower than "all models", but changing MODEL to any other already-allowed
+# value won't silently need a new IAM change.
+resource "aws_iam_role_policy" "worker_bedrock" {
+  name = "${var.project_name}-worker-bedrock-policy"
+  role = aws_iam_role.worker.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "InvokeAllowedFoundationModels"
+        Effect = "Allow"
+
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+
+        Resource = [
+          for model_id in var.bedrock_model_ids :
+          "arn:${data.aws_partition.current.partition}:bedrock:${var.region}::foundation-model/${model_id}"
+        ]
+      }
+    ]
+  })
+}
 
 resource "aws_iam_instance_profile" "worker" {
   name = "${var.project_name}-worker-profile"
