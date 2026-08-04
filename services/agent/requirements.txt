@@ -14,7 +14,7 @@ httpx
 pydantic
 boto3
 prometheus-client
-mcp>=1.2.0
+mcp==1.29.0
 langchain-mcp-adapters
 Pillow
 
