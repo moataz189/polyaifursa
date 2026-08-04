@@ -98,6 +98,6 @@ alertmanager:
         sns_configs:
           - sigv4:
               region: us-east-1
-            topic_arn: "PLACEHOLDER_NOT_YET_PROVISIONED_will_be_overwritten_by_cluster_yaml_on_first_run"
+            topic_arn: "arn:aws:sns:us-east-1:228281126655:moataz-polyai-us-east-1-cluster-alerts"
             subject: '{{ .CommonLabels.severity | toUpper }}: {{ .CommonLabels.alertname }}'
             send_resolved: true
