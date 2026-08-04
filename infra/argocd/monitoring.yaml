@@ -12,7 +12,7 @@ spec:
       targetRevision: "88.0.1"
       helm:
         valueFiles:
-          - $values/infra/helm/monitoring-values.yaml
+          - $values/infra/k8s/monitoring/values.yaml
     - repoURL: https://github.com/moataz189/polyaifursa.git
       targetRevision: main
       ref: values

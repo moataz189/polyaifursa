@@ -79,6 +79,13 @@ data "aws_ami" "k8s_node" {
     values = ["x86_64"]
   }
 }
+module "alerting" {
+  source = "./modules/alerting"
+
+  project_name = var.project_name
+  alert_email  = var.alert_email
+}
+
 module "k8s_cluster" {
   source = "./modules/k8s-cluster"
 
@@ -93,6 +100,7 @@ module "k8s_cluster" {
   worker_desired_capacity = var.worker_desired_capacity
   region                  = var.region
   s3_bucket_name          = var.s3_bucket_name
+  sns_topic_arn           = module.alerting.topic_arn
 }
 
 locals {

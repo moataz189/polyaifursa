@@ -318,6 +318,32 @@ resource "aws_iam_role_policy" "worker_bedrock" {
   })
 }
 
+# Alertmanager runs as a pod on a worker node and has no pod-level identity
+# (no IRSA in this cluster) -- it publishes to SNS using the worker EC2
+# instance role's credentials, same as every other AWS call from workloads
+# on this cluster.
+resource "aws_iam_role_policy" "worker_sns_alerts" {
+  name = "${var.project_name}-worker-sns-alerts-policy"
+  role = aws_iam_role.worker.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "PublishAlertsToSNS"
+        Effect = "Allow"
+
+        Action = [
+          "sns:Publish"
+        ]
+
+        Resource = var.sns_topic_arn
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "worker" {
   name = "${var.project_name}-worker-profile"
   role = aws_iam_role.worker.name

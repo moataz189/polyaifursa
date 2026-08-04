@@ -1,0 +1,103 @@
+fullnameOverride: monitoring
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    retention: 30d
+    # Prometheus evicts old blocks on whichever of {retention, retentionSize}
+    # is hit first. Unit format is Prometheus's own size unit ("50GiB"), NOT
+    # a Kubernetes resource quantity ("Gi") -- confirmed against this chart's
+    # own documented default. Set below the 3Gi PVC to leave headroom for the
+    # WAL and filesystem/compaction overhead.
+    retentionSize: "2GiB"
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ebs-sc
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 3Gi
+
+grafana:
+  fullnameOverride: grafana
+  persistence:
+    enabled: true
+    type: sts
+    storageClassName: ebs-sc
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 5m
+    inhibit_rules:
+      # Chart defaults, kept rather than silently dropped by this override:
+      - source_matchers:
+          - 'severity = critical'
+        target_matchers:
+          - 'severity =~ warning|info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+      - source_matchers:
+          - 'severity = warning'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+      - source_matchers:
+          - 'alertname = InfoInhibitor'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+      - target_matchers:
+          - 'alertname = InfoInhibitor'
+      # New: AgentHighErrorRate/AgentCriticalErrorRate are deliberately
+      # different alertnames, so none of the four rules above (all keyed on
+      # matching `alertname`) apply between them. Matching on `service`
+      # instead covers any warning/critical pair sharing a `service` label,
+      # not hardcoded to "agent" specifically.
+      - source_matchers:
+          - 'severity = "critical"'
+        target_matchers:
+          - 'severity = "warning"'
+        equal:
+          - 'namespace'
+          - 'service'
+    route:
+      group_by: ['namespace', 'alertname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 3h
+      receiver: 'sns'
+      routes:
+        - receiver: 'null'
+          matchers:
+            - alertname = "Watchdog"
+        - receiver: 'sns'
+          matchers:
+            - severity =~ "warning|critical"
+    receivers:
+      - name: 'null'
+      - name: 'sns'
+        sns_configs:
+          - sigv4:
+              region: us-east-1
+            topic_arn: "${SNS_TOPIC_ARN}"
+            subject: '{{ .CommonLabels.severity | toUpper }}: {{ .CommonLabels.alertname }}'
+            send_resolved: true

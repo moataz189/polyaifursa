@@ -62,6 +62,37 @@ jobs:
           CONTROL_PLANE_IP=$(terraform output -raw control_plane_public_ip)
           echo "control_plane_ip=$CONTROL_PLANE_IP" >> "$GITHUB_OUTPUT"
 
+      - name: Render monitoring values from Terraform output
+        run: |
+          SNS_TOPIC_ARN=$(terraform output -raw alerts_sns_topic_arn)
+          export SNS_TOPIC_ARN
+
+          envsubst '${SNS_TOPIC_ARN}' \
+            < "$GITHUB_WORKSPACE/infra/k8s/monitoring/values.yaml.tpl" \
+            > "$GITHUB_WORKSPACE/infra/k8s/monitoring/values.yaml"
+
+      - name: Commit and push rendered monitoring values
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Push rendered monitoring values
+        working-directory: ${{ github.workspace }}
+        run: |
+          git remote set-url origin git@github.com:moataz189/polyaifursa.git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add infra/k8s/monitoring/values.yaml
+
+          if git diff --cached --quiet; then
+            echo "No monitoring values changes to commit."
+            exit 0
+          fi
+
+          git commit -m "monitoring: render Alertmanager SNS topic ARN from Terraform output [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
+
   bootstrap:
     name: Bootstrap Kubernetes Cluster
     runs-on: ubuntu-latest

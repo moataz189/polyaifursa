@@ -107,3 +107,12 @@ output "ingress_hostnames" {
   description = "Public hostnames routed through the ALB"
   value       = module.ingress.hostnames
 }
+
+# ==========================================
+# Alerting
+# ==========================================
+
+output "alerts_sns_topic_arn" {
+  description = "ARN of the SNS topic Alertmanager publishes to"
+  value       = module.alerting.topic_arn
+}
