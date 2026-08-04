@@ -60,3 +60,7 @@ variable "bedrock_model_ids" {
     "mistral.mistral-7b-instruct-v0:2",
   ]
 }
+variable "sns_topic_arn" {
+  description = "ARN of the SNS topic Alertmanager publishes alerts to"
+  type        = string
+}

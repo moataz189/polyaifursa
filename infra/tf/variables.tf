@@ -48,3 +48,9 @@ variable "s3_bucket_name" {
   description = "Name of the existing (externally managed) S3 bucket used for image storage"
   type        = string
 }
+
+variable "alert_email" {
+  description = "Email address that receives Alertmanager notifications via SNS"
+  type        = string
+  sensitive   = true
+}

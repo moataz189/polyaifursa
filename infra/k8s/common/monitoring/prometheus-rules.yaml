@@ -1,0 +1,78 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-yolo-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: agent.rules
+      rules:
+        - alert: AgentHighErrorRate
+          expr: |
+            100 *
+            (
+              sum(rate(agent_chat_requests_total{status="error"}[5m]))
+              or vector(0)
+            )
+            /
+            clamp_min(
+              sum(rate(agent_chat_requests_total[5m])),
+              0.000001
+            )
+            > 5
+          for: 5m
+          labels:
+            severity: warning
+            service: agent
+          annotations:
+            summary: "Agent /chat error rate above 5% ({{ $value | printf \"%.1f\" }}%)"
+            description: "More than 5% of Agent /chat requests failed over the last 5 minutes, across all namespaces. Check agent pod logs and the Bedrock/S3 IAM grants."
+
+        - alert: AgentCriticalErrorRate
+          expr: |
+            100 *
+            (
+              sum(rate(agent_chat_requests_total{status="error"}[5m]))
+              or vector(0)
+            )
+            /
+            clamp_min(
+              sum(rate(agent_chat_requests_total[5m])),
+              0.000001
+            )
+            > 25
+          for: 5m
+          labels:
+            severity: critical
+            service: agent
+          annotations:
+            summary: "Agent /chat error rate above 25% ({{ $value | printf \"%.1f\" }}%)"
+            description: "More than a quarter of Agent /chat requests are failing -- likely a hard dependency outage (Bedrock, S3, or the agent pod itself), not transient errors."
+
+    - name: yolo.rules
+      rules:
+        - alert: YoloHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_seconds_bucket{job="yolo-svc"}[5m])) by (le)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            service: yolo
+          annotations:
+            summary: "YOLO p95 request latency above 2s"
+            description: "95th percentile request latency for yolo-svc has exceeded 2 seconds for 5 minutes. Detection requests are slower than expected for interactive use."
+
+        - alert: YoloDown
+          expr: up{job="yolo-svc"} == 0
+          # Reduced from 2m to 1m for demo purposes, so the full
+          # Pending -> Firing -> email -> RESOLVED chain can be demonstrated
+          # more quickly. Every other rule's `for` is unchanged.
+          for: 1m
+          labels:
+            severity: critical
+            service: yolo
+          annotations:
+            summary: "YOLO target is down"
+            description: "Prometheus has not been able to scrape yolo-svc for 1 minute -- the detection service is very likely fully unavailable, not just slow."
