@@ -49,6 +49,24 @@ spec:
             summary: "Agent /chat error rate above 25% ({{ $value | printf \"%.1f\" }}%)"
             description: "More than a quarter of Agent /chat requests are failing -- likely a hard dependency outage (Bedrock, S3, or the agent pod itself), not transient errors."
 
+        - alert: AgentPodNotReady
+          # kube_pod_status_ready (from kube-state-metrics) reflects the
+          # Pod's own Ready condition, unlike `up{job="agent-svc"}` which
+          # only reflects whether Prometheus can reach the metrics port --
+          # a pod can fail its readiness probe (and stop receiving traffic)
+          # while its metrics endpoint keeps responding, so `up` alone
+          # would miss this. `for: 1m` here is deliberately shorter than
+          # the bundled default KubePodNotReady rule's 15m, so a stuck
+          # agent pod pages faster than the generic cluster-wide rule.
+          expr: kube_pod_status_ready{condition="false", pod=~"agent-.*"} == 1
+          for: 1m
+          labels:
+            severity: warning
+            service: agent
+          annotations:
+            summary: "Agent pod is not Ready"
+            description: "An agent pod has failed its readiness probe for 1 minute -- traffic routed through agent-svc will not reach this pod. Check pod logs and events."
+
     - name: yolo.rules
       rules:
         - alert: YoloHighLatency
@@ -65,10 +83,18 @@ spec:
             description: "95th percentile request latency for yolo-svc has exceeded 2 seconds for 5 minutes. Detection requests are slower than expected for interactive use."
 
         - alert: YoloDown
-          expr: up{job="yolo-svc"} == 0
+          expr: |
+            up{job="yolo-svc"} == 0
+            or absent(up{job="yolo-svc"})
           # Reduced from 2m to 1m for demo purposes, so the full
           # Pending -> Firing -> email -> RESOLVED chain can be demonstrated
           # more quickly. Every other rule's `for` is unchanged.
+          #
+          # The `absent()` arm matters because this target is discovered via
+          # the Service's Endpoints: scaling the Deployment to 0 replicas
+          # empties the Endpoints, so the `up{job="yolo-svc"}` series
+          # disappears (stale marker) instead of reading 0 -- without
+          # `absent()`, a fully-scaled-down yolo never fires this alert.
           for: 1m
           labels:
             severity: critical
