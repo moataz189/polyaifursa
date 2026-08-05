@@ -1,4 +1,4 @@
-mcp>=1.2.0,<2.0.0
+mcp==1.29.0
 uvicorn
 Pillow
 boto3
