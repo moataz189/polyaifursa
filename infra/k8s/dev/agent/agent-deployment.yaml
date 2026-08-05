@@ -32,7 +32,7 @@ spec:
               value: "http://yolo-svc:8080"
 
             - name: IMG_PROC_MCP_URL
-              value: "http://21img-proc-mcp-svc:9000/mcp"
+              value: "http://img-proc-mcp-svc:9000/mcp"
 
             - name: AWS_REGION
               value: "us-east-1"
