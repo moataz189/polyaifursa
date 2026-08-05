@@ -44,7 +44,7 @@ spec:
               value: "bedrock_converse"
 
             - name: MODEL
-              value: "openai.gpt-oss-20b-1:0"
+              value: "12openai.gpt-oss-20b-1:0"
 
           resources:
             requests:
