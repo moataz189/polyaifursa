@@ -29,7 +29,7 @@ spec:
 
           env:
             - name: YOLO_SERVICE_URL
-              value: "http://yolo12-svc:8080"
+              value: "http://yolo-svc:8080"
 
             - name: IMG_PROC_MCP_URL
               value: "http://img-proc-mcp-svc:9000/mcp"
@@ -41,7 +41,7 @@ spec:
               value: "moataz-polyai-images"
 
             - name: MODEL_PROVIDER
-              value: "bedrock_converse"
+              value: "bedrock11_converse"
 
             - name: MODEL
               value: "openai.gpt-oss-20b-1:0"
